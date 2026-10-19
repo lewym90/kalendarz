@@ -144,6 +144,6 @@ let code = "";
 try { code = await new Request(CODE_URL + "?t=" + Math.floor(Date.now() / 600000)).loadString(); if (code.length > 500) fm.writeString(path, code); else code = ""; } catch (e) { code = ""; }
 if (!code && fm.fileExists(path)) code = fm.readString(path);
 if (!code) throw new Error("Brak kodu widgetu (potrzebny internet przy pierwszym uruchomieniu)");
-await new Function("DATA_URL", "return (async () => {" + code + "\n})()")(DATA_URL);
+await new Function("DATA_URL", "return (async () => {" + code + String.fromCharCode(10) + "})()")(DATA_URL);
 `;
 }
