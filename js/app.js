@@ -5,9 +5,10 @@ import {
 } from './store.js';
 import { parse } from './nlp.js';
 import { instancesInRange } from './recur.js';
-import { nav, saveNav, setRender, rerender, toast, showBanner, confirmSheet, closeTopSheet, sheetOpen } from './ui.js';
+import { nav, saveNav, setRender, rerender, toast, showBanner, confirmSheet, closeTopSheet, sheetOpen, openSheet, closeSheet } from './ui.js';
 import { renderToday, renderCal, renderTasks, renderHub, paintWeather, bindGridDrag, bindMonthDrag, bindTray, dragState, instOf, skyPhase } from './screens.js';
 import { openQuickAdd, openEventEditor, openTaskEditor, openRuleEditor, openCatEditor, openSearch, openCitySheet, defaultDraftFor } from './editors.js';
+import { pushConfig, pushConnect, pushDisconnect, pushTest, pushSync, initPush, pushSupported } from './push.js';
 import { tick, snooze, updateBadge, enableNotifications, testNotification, setHandlers, briefFor } from './notify.js';
 import { initLock, openLockSettings } from './lock.js';
 import { openFindSlot, openStats, importICS } from './tools.js';
@@ -217,6 +218,26 @@ const actions = {
     else toast('Powiadomienia nie są tu dostępne. Dodaj aplikację do ekranu początkowego.');
     render();
   },
+  'push-connect'() {
+    const h = openSheet(`<div class="grab"><i></i></div>
+      <div class="sheet-h"><h3>Powiadomienia z serwera</h3><button type="button" class="round" data-x="close" aria-label="Zamknij"><span class="ico">${ICON.close}</span></button></div>
+      <div class="sheet-b">
+      <p class="note" style="margin:0 0 12px">Wpisz adres i kod, które wypisał instalator na serwerze. Dzięki temu przypomnienia dotrą, nawet gdy aplikacja jest zamknięta.</p>
+      <div class="field"><label class="grow" for="pc-url">Adres</label><input id="pc-url" type="url" inputmode="url" autocapitalize="off" autocorrect="off" placeholder="https://…/kalendarz-push"></div>
+      <div class="field"><label class="grow" for="pc-code">Kod</label><input id="pc-code" type="text" autocapitalize="off" autocorrect="off" placeholder="kod z instalatora"></div>
+      <p class="note" id="pc-err" style="color:#e5484d" hidden></p>
+      <button type="button" class="btn primary" id="pc-go" style="width:100%;margin-top:10px">Połącz</button></div>`);
+    const q = (x) => h.el.querySelector(x);
+    q('[data-x=close]').onclick = () => closeSheet(h);
+    q('#pc-go').onclick = async () => {
+      const b = q('#pc-go'); b.disabled = true; b.textContent = 'Łączę…'; q('#pc-err').hidden = true;
+      try { await pushConnect(q('#pc-url').value, q('#pc-code').value); closeSheet(h); toast('Połączono z serwerem'); render(); }
+      catch (e) { q('#pc-err').textContent = e.message || 'Nie udało się połączyć'; q('#pc-err').hidden = false; b.disabled = false; b.textContent = 'Połącz'; }
+    };
+  },
+  async 'push-disconnect'() { await pushDisconnect(); toast('Rozłączono'); render(); },
+  async 'push-test'() { try { await pushTest(); toast('Wysłano test z serwera'); } catch (e) { toast(e.message || 'Test nie powiódł się'); } },
+  async 'push-sync'() { const ok = await pushSync(true); toast(ok ? 'Zsynchronizowano' : 'Synchronizacja nie powiodła się'); render(); },
   'test-notif'() { testNotification(); toast('Wysłano testowe powiadomienie'); },
   export() { download(`kalendarz-kopia-${ymd(new Date())}.json`, exportData(), 'application/json'); },
   'export-ics'() { download(`kalendarz-${ymd(new Date())}.ics`, icsExport(), 'text/calendar'); },
@@ -360,6 +381,7 @@ document.addEventListener('visibilitychange', () => {
   refreshWeather();
 });
 
+initPush();
 onChange(() => { lastPaint = Date.now(); render(); updateBadge(); });
 
 bindMonthDrag(view);

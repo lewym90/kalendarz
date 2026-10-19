@@ -9,6 +9,7 @@ import { nav, toast, rerender } from './ui.js';
 import { weatherKind, cachedWeather, hourlyFor, dailyFor, isOutdoor } from './weather.js';
 import { lockOn, lockSummary } from './lock.js';
 import { dayInfo, nameDays, isoWeek, sunTimes } from './extras.js';
+import { pushConfig, pushSupported } from './push.js';
 import { notifPermission, notifSupported, isStandalone } from './notify.js';
 import { shortRemind, openEventEditor, defaultDraftFor, openQuickAdd, autoName } from './editors.js';
 
@@ -758,6 +759,8 @@ export function renderHub() {
     return `<div class="${sameDay(d, now) ? 't' : ''}"><i style="height:${Math.max(4, (h / maxH) * 100)}%"></i><span>${DAYS_LETTER[d.getDay()]}</span></div>`;
   }).join('');
   const perm = notifPermission();
+  const pcfg = pushConfig();
+  const pushSub = pcfg ? (pcfg.error ? `Błąd: ${pcfg.error}` : pcfg.syncedAt ? `Połączono. Ostatnia synchronizacja: ${new Date(pcfg.syncedAt).toLocaleTimeString('pl-PL', { hour: '2-digit', minute: '2-digit' })}.` : 'Połączono.') : 'Przypomnienia także przy zamkniętej aplikacji (własny serwer).';
   const standalone = isStandalone();
   const notifSub = !notifSupported() ? 'Ta przeglądarka nie obsługuje powiadomień.' : perm === 'granted' ? 'Włączone. Przypomnienia pojawią się na ekranie blokady.' : perm === 'denied' ? 'Zablokowane. Włącz w Ustawieniach iPhone\'a, w sekcji Powiadomienia.' : standalone ? 'Włącz, żeby dostawać przypomnienia i poranny brief.' : 'Najpierw dodaj aplikację do ekranu początkowego.';
   const catRows = state.cats.map((c) => `<button type="button" class="row" data-act="edit-cat" data-id="${c.id}"><span class="catdot" style="--c:${c.color};padding:0;height:auto;background:none"></span><span class="rt"><b>${esc(c.name)}</b></span><span class="val">${state.events.filter((e) => e.cat === c.id).length}</span></button>`).join('');
@@ -793,6 +796,7 @@ export function renderHub() {
   <section class="sec"><div class="sec-h"><h2>Powiadomienia</h2></div>
     <div class="list">
       <div class="row"><span class="ico">${ICON.bell}</span><span class="rt"><b>Przypomnienia na telefonie</b><small>${esc(notifSub)}</small></span>${perm === 'default' && notifSupported() ? '<button type="button" class="btn small primary" data-act="enable-notif">Włącz</button>' : perm === 'granted' ? '<button type="button" class="btn small" data-act="test-notif">Test</button>' : ''}</div>
+      <div class="row"><span class="ico">${ICON.bell}</span><span class="rt"><b>Powiadomienia z serwera</b><small>${esc(pushSub)}</small></span>${pcfg ? '<button type="button" class="btn small" data-act="push-test">Test</button><button type="button" class="btn small" data-act="push-disconnect">Rozłącz</button>' : pushSupported() && standalone ? '<button type="button" class="btn small primary" data-act="push-connect">Połącz</button>' : ''}</div>
       <div class="row"><span class="ico">${ICON.today}</span><span class="rt"><b>Licznik na ikonie</b><small>Ile rzeczy czeka dziś</small></span><select data-in="badge" aria-label="Licznik na ikonie"><option value="off" ${s.badge === 'off' ? 'selected' : ''}>Wyłączony</option><option value="events" ${s.badge === 'events' ? 'selected' : ''}>Wydarzenia</option><option value="all" ${s.badge === 'all' ? 'selected' : ''}>Wydarzenia i zadania</option></select></div>
       <div class="row"><span class="ico">${ICON.clock}</span><span class="rt"><b>Domyślne przypomnienie</b><small>Dla nowych wydarzeń</small></span><select data-in="defaultRemind" data-arr="1" aria-label="Domyślne przypomnienie">${[[[], 'Brak'], [[0], 'W chwili startu'], [[5], '5 min'], [[10], '10 min'], [[15], '15 min'], [[30], '30 min'], [[60], '1 godz.']].map(([v, l]) => `<option value='${JSON.stringify(v)}' ${JSON.stringify(s.defaultRemind) === JSON.stringify(v) ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
     </div>

@@ -1,0 +1,9 @@
+{
+  "name": "kalendarz-push",
+  "private": true,
+  "type": "module",
+  "version": "1.0.0",
+  "description": "Serwer powiadomień Web Push dla aplikacji Kalendarz (osobna, lekka usługa).",
+  "scripts": { "start": "node push-server.mjs", "test": "node test.mjs" },
+  "dependencies": { "web-push": "3.6.7" }
+}

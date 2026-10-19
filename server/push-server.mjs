@@ -1,0 +1,174 @@
+// Serwer powiadomień Web Push dla Kalendarza. Lekka, osobna usługa: nasłuchuje tylko na 127.0.0.1.
+// Aplikacja wysyła tu listę nadchodzących alarmów; serwer o właściwej godzinie wysyła powiadomienie push
+// (iOS dostarcza je, nawet gdy aplikacja jest zamknięta i telefon w trybie cichym — z wibracją wg ustawień systemu).
+import http from 'node:http';
+import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
+import webpush from 'web-push';
+
+const cfg = {
+  port: +(process.env.PORT || 8790),
+  host: process.env.HOST || '127.0.0.1',
+  dataFile: process.env.DATA_FILE || '/opt/kalendarz/data/db.json',
+  setupCode: process.env.SETUP_CODE || '',
+  vapidPublic: process.env.VAPID_PUBLIC || '',
+  vapidPrivate: process.env.VAPID_PRIVATE || '',
+  subject: process.env.VAPID_SUBJECT || 'https://lewym90.github.io/kalendarz/',
+  origin: process.env.ALLOW_ORIGIN || 'https://lewym90.github.io',
+  maxDevices: +(process.env.MAX_DEVICES || 5),
+  maxAlarms: +(process.env.MAX_ALARMS || 600),
+  lateMs: +(process.env.LATE_MS || 2 * 3600000),   // alarmy spóźnione o więcej nie są wysyłane
+  tickMs: +(process.env.TICK_MS || 15000),
+};
+
+export const sha = (s) => crypto.createHash('sha256').update(s).digest('hex');
+const safeEq = (a, b) => { const x = Buffer.from(a); const y = Buffer.from(b); return x.length === y.length && crypto.timingSafeEqual(x, y); };
+
+// ---------- Magazyn (plik JSON, zapis atomowy) ----------
+let db = { devices: {} };
+export function loadDb(file = cfg.dataFile) {
+  try { db = JSON.parse(fs.readFileSync(file, 'utf8')); } catch (_) { db = { devices: {} }; }
+  db.devices ||= {};
+  return db;
+}
+let dirty = false;
+export function saveDb(file = cfg.dataFile) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const tmp = `${file}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(db), { mode: 0o600 });
+  fs.renameSync(tmp, file);
+  dirty = false;
+}
+const touch = () => { dirty = true; };
+export const getDb = () => db;
+
+// ---------- Wysyłka ----------
+export let sender = (sub, payload, opts) => webpush.sendNotification(sub, payload, opts);
+export const setSender = (f) => { sender = f; };
+
+export async function sendTo(id, dev, a) {
+  const payload = JSON.stringify({ title: a.title || 'Kalendarz', body: a.body || '', tag: a.tag || a.id, url: a.url || './', badge: a.badge });
+  try {
+    await sender(dev.sub, payload, { TTL: 3600, urgency: 'high', vapidDetails: { subject: cfg.subject, publicKey: cfg.vapidPublic, privateKey: cfg.vapidPrivate } });
+    return true;
+  } catch (e) {
+    if (e.statusCode === 404 || e.statusCode === 410) { delete db.devices[id]; touch(); log(`urządzenie ${id.slice(0, 6)} wygasło (${e.statusCode}) – usunięto`); } else log(`błąd wysyłki ${e.statusCode || ''} ${e.message || e}`);
+    return false;
+  }
+}
+
+export async function runDue(now = Date.now()) {
+  let sent = 0;
+  for (const [id, dev] of Object.entries(db.devices)) {
+    dev.sent ||= {};
+    const due = (dev.alarms || []).filter((a) => a.at <= now && a.at > now - cfg.lateMs && !dev.sent[a.id]);
+    // po dłuższej przerwie nie zalewamy telefonu: najpóźniej 3 najnowsze
+    for (const a of due.slice(-3)) {
+      dev.sent[a.id] = now;
+      touch();
+      if (await sendTo(id, dev, a)) sent++;
+      if (!db.devices[id]) break;
+    }
+    due.slice(0, -3).forEach((a) => { dev.sent[a.id] = now; touch(); });
+    if (!db.devices[id]) continue;
+    const before = dev.alarms.length;
+    dev.alarms = dev.alarms.filter((a) => a.at > now - cfg.lateMs && !dev.sent[a.id]);
+    for (const k of Object.keys(dev.sent)) if (dev.sent[k] < now - 3 * 86400000) delete dev.sent[k];
+    if (dev.alarms.length !== before) touch();
+  }
+  if (dirty) saveDb();
+  return sent;
+}
+
+// ---------- HTTP ----------
+const log = (...a) => console.log(new Date().toISOString(), ...a);
+const hits = new Map();
+const limited = (ip) => {
+  const m = Math.floor(Date.now() / 60000);
+  const k = `${ip}:${m}`;
+  hits.set(k, (hits.get(k) || 0) + 1);
+  if (hits.size > 5000) for (const x of hits.keys()) if (!x.endsWith(`:${m}`)) hits.delete(x);
+  return hits.get(k) > 120;
+};
+
+function readBody(req, max = 400_000) {
+  return new Promise((resolve, reject) => {
+    let n = 0; const chunks = [];
+    req.on('data', (c) => { n += c.length; if (n > max) { reject(Object.assign(new Error('za duże'), { code: 413 })); req.destroy(); } else chunks.push(c); });
+    req.on('end', () => { try { resolve(chunks.length ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : {}); } catch (_) { reject(Object.assign(new Error('zły JSON'), { code: 400 })); } });
+    req.on('error', reject);
+  });
+}
+
+const validSub = (s) => s && typeof s.endpoint === 'string' && /^https:\/\//.test(s.endpoint) && s.keys && typeof s.keys.p256dh === 'string' && typeof s.keys.auth === 'string';
+const validId = (s) => typeof s === 'string' && /^[A-Za-z0-9_-]{16,64}$/.test(s);
+const clean = (a) => ({
+  id: String(a.id).slice(0, 120), at: Math.round(+a.at), title: String(a.title || '').slice(0, 140), body: String(a.body || '').slice(0, 300),
+  tag: String(a.tag || a.id).slice(0, 120), url: String(a.url || './').slice(0, 200),
+});
+
+export async function handle(method, url, headers, body) {
+  const route = url.split('?')[0].replace(/\/+$/, '') || '/';
+  if (method === 'GET' && route === '/health') return [200, { ok: true, devices: Object.keys(db.devices).length }];
+  if (method === 'GET' && route === '/vapid') return [200, { publicKey: cfg.vapidPublic }];
+  const auth = (headers.authorization || '').replace(/^Bearer\s+/i, '');
+  if (method === 'POST' && route === '/subscribe') {
+    const { deviceId, setup, subscription } = body || {};
+    if (!validId(deviceId) || !validSub(subscription)) return [400, { error: 'nieprawidłowe dane' }];
+    const dev = db.devices[deviceId];
+    if (dev) {
+      if (!auth || !safeEq(sha(auth), dev.tokenHash)) return [401, { error: 'brak uprawnień' }];
+      dev.sub = subscription; touch();
+      return [200, { ok: true }];
+    }
+    if (!cfg.setupCode || typeof setup !== 'string' || !safeEq(setup, cfg.setupCode)) return [401, { error: 'zły kod połączenia' }];
+    if (Object.keys(db.devices).length >= cfg.maxDevices) return [403, { error: 'za dużo urządzeń' }];
+    const token = crypto.randomBytes(24).toString('base64url');
+    db.devices[deviceId] = { tokenHash: sha(token), sub: subscription, alarms: [], sent: {}, created: Date.now() };
+    touch(); saveDb();
+    return [200, { ok: true, token }];
+  }
+  const id = body && body.deviceId;
+  const dev = validId(id) ? db.devices[id] : null;
+  if (!dev || !auth || !safeEq(sha(auth), dev.tokenHash)) return [401, { error: 'brak uprawnień' }];
+  if (method === 'POST' && route === '/sync') {
+    const now = Date.now();
+    const list = (Array.isArray(body.alarms) ? body.alarms : []).filter((a) => a && a.id && Number.isFinite(+a.at) && +a.at > now - cfg.lateMs && +a.at < now + 15 * 86400000).slice(0, cfg.maxAlarms).map(clean);
+    dev.alarms = list.filter((a) => !(dev.sent || {})[a.id]);
+    dev.sync = now; touch(); saveDb();
+    return [200, { ok: true, queued: dev.alarms.length }];
+  }
+  if (method === 'POST' && route === '/unsubscribe') { delete db.devices[id]; touch(); saveDb(); return [200, { ok: true }]; }
+  if (method === 'POST' && route === '/test') {
+    const ok = await sendTo(id, dev, { id: `test:${Date.now()}`, title: 'Test powiadomienia z serwera', body: 'Działa. Przypomnienia dotrą, nawet gdy aplikacja jest zamknięta.', url: './' });
+    return [ok ? 200 : 502, { ok }];
+  }
+  return [404, { error: 'nie znaleziono' }];
+}
+
+export function createServer() {
+  return http.createServer(async (req, res) => {
+    const origin = req.headers.origin;
+    const cors = { 'Access-Control-Allow-Origin': origin && origin === cfg.origin ? origin : cfg.origin, 'Access-Control-Allow-Headers': 'Authorization, Content-Type', 'Access-Control-Allow-Methods': 'GET, POST, OPTIONS', 'Access-Control-Max-Age': '86400', Vary: 'Origin' };
+    const send = (code, obj) => { res.writeHead(code, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...cors }); res.end(JSON.stringify(obj)); };
+    if (req.method === 'OPTIONS') { res.writeHead(204, cors); return res.end(); }
+    const ip = (req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').split(',')[0].trim();
+    if (limited(ip)) return send(429, { error: 'za dużo żądań' });
+    try {
+      const body = req.method === 'POST' ? await readBody(req) : {};
+      const [code, obj] = await handle(req.method, req.url, req.headers, body);
+      send(code, obj);
+    } catch (e) { send(e.code === 413 || e.code === 400 ? e.code : 500, { error: e.message || 'błąd' }); }
+  });
+}
+
+if (import.meta.url === `file://${process.argv[1]}`) {
+  if (!cfg.vapidPublic || !cfg.vapidPrivate || !cfg.setupCode) { console.error('Brak VAPID_PUBLIC / VAPID_PRIVATE / SETUP_CODE w środowisku.'); process.exit(1); }
+  loadDb();
+  const srv = createServer();
+  srv.listen(cfg.port, cfg.host, () => log(`Kalendarz push: ${cfg.host}:${cfg.port}, urządzeń: ${Object.keys(db.devices).length}`));
+  setInterval(() => runDue().catch((e) => log('tick', e.message)), cfg.tickMs);
+  const bye = () => { try { if (dirty) saveDb(); } catch (_) { /* nic */ } process.exit(0); };
+  process.on('SIGTERM', bye); process.on('SIGINT', bye);
+}

@@ -26,5 +26,14 @@ Osobiste centrum dowodzenia: kalendarz, zadania i automatyzacje w jednej aplikac
 Dane zapisują się lokalnie w telefonie. Bez zależności i bez budowania: czyste HTML, CSS i JavaScript.
 
 
+## Powiadomienia przy zamkniętej aplikacji (opcjonalnie)
+
+iOS usypia aplikacje w tle, więc lokalne przypomnienia działają głównie przy otwartej aplikacji. Żeby dostawać je zawsze, folder `server/` zawiera małą usługę Web Push (Node, `web-push`) dla własnego VPS-a:
+
+1. Jako root na serwerze: `bash <(curl -fsSL https://raw.githubusercontent.com/lewym90/kalendarz/main/server/install.sh)` (wymaga Caddy z folderem `conf.d`). Instalator tworzy osobnego użytkownika, usługę `kalendarz-push` na `127.0.0.1:8790` i jedną trasę `/kalendarz-push/` w Caddy (z walidacją i automatycznym wycofaniem). Wypisuje adres i kod połączenia.
+2. W aplikacji (z ekranu początkowego): Centrum, Powiadomienia, „Powiadomienia z serwera”, Połącz.
+
+Aplikacja wysyła serwerowi alarmy na najbliższe 14 dni i odświeża je po każdej zmianie. Serwer zapisuje tylko to, co potrzebne do wysyłki, a token urządzenia trzyma jako skrót. Testy serwera: `cd server && npm install && npm test`.
+
 ## Testy
 `npm test` (Node 22, bez zależności): parser zdań, powtarzanie, święta, import .ics, wolne terminy, podział serii.
