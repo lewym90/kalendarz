@@ -803,7 +803,7 @@ export function renderHub() {
     ${!standalone ? `<p class="note"><b>Instalacja:</b> w Safari dotknij Udostępnij, potem „Dodaj do ekranu początkowego". Dopiero wtedy iOS pozwala na powiadomienia i licznik na ikonie.</p>` : ''}
     <p class="note"><button type="button" class="btn small" data-act="screen-test">Test ekranu</button></p>
     <p class="note" id="push-dbg" style="opacity:.55;font-size:12px;word-break:break-all"></p>
-    <p class="note" style="opacity:.55;font-size:12px">Wersja v9. Ekran: ${window.__vp || ''}, luka ${window.__gap || 0}px, dock ${Math.round((document.querySelector('.dock')?.getBoundingClientRect().bottom) || 0)}.</p>
+    <p class="note" style="opacity:.55;font-size:12px">Wersja v10. Ekran: ${window.__vp || ''}, luka ${window.__gap || 0}px, dock ${Math.round((document.querySelector('.dock')?.getBoundingClientRect().bottom) || 0)}.</p>
     <p class="note">Wibracje przy powiadomieniach zależą od systemu: w Ustawienia, Dźwięki i haptyka, włącz „Odtwarzaj haptykę w trybie cichym".</p>
   </section>
 
