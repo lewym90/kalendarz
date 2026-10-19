@@ -67,6 +67,17 @@ document.addEventListener('scroll', (e) => {
   if (t && t.classList && t.classList.contains('screen')) document.body.classList.toggle('scrolled', t.scrollTop > 6);
 }, true);
 
+async function fillPushDbg() {
+  try {
+    const el = document.getElementById('push-dbg');
+    if (!el) return;
+    const r = await (await caches.open('kalendarz-dbg')).match('/dbg.json');
+    if (!r) { el.textContent = 'Diagnostyka pusha: brak odebranych powiadomień z serwera.'; return; }
+    const j = await r.json();
+    el.textContent = `Diagnostyka pusha ${new Date(j.t).toLocaleTimeString('pl-PL')}: ${j.msg}`;
+  } catch (_) { /* nic */ }
+}
+
 function render() {
   const key = nav.tab + (nav.tab === 'cal' ? ':' + nav.calView : '');
   const scroll = view.scrollTop;
@@ -103,6 +114,7 @@ function render() {
   needScroll = false;
   renderDock();
   requestAnimationFrame(() => document.body.classList.toggle('scrolled', view.scrollTop > 6));
+  if (nav.tab === 'hub') fillPushDbg();
 }
 setRender(render);
 

@@ -1,5 +1,5 @@
 // Service worker: działanie offline, powiadomienia, obsługa kliknięć i (opcjonalnie) push z serwera.
-const VERSION = 'kalendarz-v5';
+const VERSION = 'kalendarz-v6';
 const SHELL = [
   './', 'index.html', 'manifest.webmanifest', 'css/app.css',
   'js/app.js', 'js/util.js', 'js/store.js', 'js/recur.js', 'js/nlp.js', 'js/notify.js', 'js/weather.js', 'js/ui.js', 'js/editors.js', 'js/screens.js', 'js/extras.js', 'js/data/imieniny.js', 'js/ics.js', 'js/planner.js', 'js/tools.js', 'js/lock.js', 'js/push.js',
@@ -53,14 +53,23 @@ self.addEventListener('notificationclick', (e) => {
   );
 });
 
-// Push z serwera (opcjonalny etap 2): { title, body, badge, url }.
+// Push z serwera: { title, body, badge, url, tag }. Diagnostykę ostatniego pusha zapisujemy w pamięci podręcznej (widać ją w Centrum).
+async function dbg(msg) {
+  try { const c = await caches.open('kalendarz-dbg'); await c.put('/dbg.json', new Response(JSON.stringify({ t: Date.now(), msg }))); } catch (_) { /* nic */ }
+}
 self.addEventListener('push', (e) => {
+  let raw = '';
+  try { raw = e.data ? e.data.text() : '(brak danych)'; } catch (err) { raw = `(błąd odczytu: ${err})`; }
   let d = {};
-  try { d = e.data ? e.data.json() : {}; } catch (_) { d = { title: 'Kalendarz', body: e.data && e.data.text() }; }
-  e.waitUntil(
-    Promise.all([
-      self.registration.showNotification(d.title || 'Kalendarz', { body: d.body || '', icon: 'icons/icon-192.png', tag: d.tag, data: { url: d.url || './' } }),
-      typeof d.badge === 'number' && self.navigator.setAppBadge ? (d.badge > 0 ? self.navigator.setAppBadge(d.badge) : self.navigator.clearAppBadge()) : null,
-    ])
-  );
+  try { d = JSON.parse(raw); } catch (_) { d = { title: 'Kalendarz', body: raw }; }
+  e.waitUntil((async () => {
+    try {
+      await self.registration.showNotification(d.title || 'Kalendarz', { body: d.body || '', icon: 'icons/icon-192.png', tag: d.tag, data: { url: d.url || './' } });
+      if (typeof d.badge === 'number' && self.navigator.setAppBadge) { if (d.badge > 0) await self.navigator.setAppBadge(d.badge); else await self.navigator.clearAppBadge(); }
+      await dbg(`OK: ${raw.slice(0, 200)}`);
+    } catch (err) {
+      await dbg(`BŁĄD: ${err} | ${raw.slice(0, 120)}`);
+      try { await self.registration.showNotification(d.title || 'Kalendarz', { body: d.body || '' }); } catch (_) { /* nic */ }
+    }
+  })());
 });
