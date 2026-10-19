@@ -85,7 +85,15 @@ export function agendaPayload(now = new Date()) {
     items.sort((a, b) => (a.ad ? 0 : 1) - (b.ad ? 0 : 1) || (a.s || '99:99').localeCompare(b.s || '99:99') || a._o - b._o);
     days.push({ d: key, items: items.map(({ _o, ...r }) => r) });
   }
-  return { days };
+  // Liczba pozycji na dzień (60 dni) do kropek w miniaturze miesiąca.
+  const cnt = {};
+  const far = addDays(from, 60);
+  for (const x of instancesInRange(state.events, from, far)) {
+    for (let d = startOfDay(x.start); d < x.end && d < far; d = addDays(d, 1)) { const k = ymd(d); cnt[k] = (cnt[k] || 0) + 1; }
+  }
+  for (const t of state.tasks) if (!t.done && t.due && t.due >= ymd(from) && t.due < ymd(far)) cnt[t.due] = (cnt[t.due] || 0) + 1;
+  const c = state.settings.city || {};
+  return { days, cnt, geo: { n: c.name || '', lat: c.lat, lon: c.lon } };
 }
 
 let lastSig = '';

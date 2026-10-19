@@ -41,3 +41,5 @@ Po połączeniu z serwerem aplikacja wysyła mu plan dnia na 7 dni. Serwer udost
 
 ## Testy
 `npm test` (Node 22, bez zależności): parser zdań, powtarzanie, święta, import .ics, wolne terminy, podział serii.
+
+Widget średni (pełna szerokość) pokazuje miniaturę miesiąca z zaznaczonym dniem, pogodę (Open-Meteo, miejsce z ustawień aplikacji) i plan dnia; tło to ciemne, półprzezroczyste szkło. Parametr widgetu `slate` daje chłodny grafit jak w widgecie Pogoda.

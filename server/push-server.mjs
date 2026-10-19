@@ -118,7 +118,11 @@ export function cleanAgenda(a) {
       k: i.k === 't' ? 't' : 'e', s: str(i.s, 5), e: str(i.e, 5), ad: i.ad ? 1 : 0, t: str(i.t, 120), l: str(i.l, 80), c: /^#[0-9a-fA-F]{6}$/.test(i.c || '') ? i.c : '', done: i.done ? 1 : 0,
     })),
   })).filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d.d));
-  return { gen: Date.now(), days, extra: str(a.extra, 160) };
+  const cnt = {};
+  if (a.cnt && typeof a.cnt === 'object') for (const [k, v] of Object.entries(a.cnt).slice(0, 70)) if (/^\d{4}-\d{2}-\d{2}$/.test(k) && Number.isFinite(+v)) cnt[k] = Math.max(0, Math.min(99, Math.round(+v)));
+  const g = a.geo || {};
+  const geo = Number.isFinite(+g.lat) && Number.isFinite(+g.lon) && Math.abs(+g.lat) <= 90 && Math.abs(+g.lon) <= 180 ? { n: str(g.n, 40), lat: +g.lat, lon: +g.lon } : null;
+  return { gen: Date.now(), days, cnt, geo };
 }
 
 export async function handle(method, url, headers, body) {
