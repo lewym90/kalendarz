@@ -44,11 +44,11 @@ await t('zaległości: tylko 3 najnowsze', async () => {
 let wt;
 await t('agenda i token widgetu', async () => {
   const day = new Date().toISOString().slice(0, 10);
-  const [c, j] = await call('POST', '/sync', { deviceId: ID, alarms: [], agenda: { days: [{ d: day, items: [{ k: 'e', s: '09:30', e: '10:00', t: 'Dentysta', l: 'Mokotów', c: '#ff8800' }, { k: 'x', t: '<b>zły</b>', c: 'red' }] }, { d: 'zła-data', items: [] }], cnt: { '2026-10-25': 3, zly: 1, '2026-10-26': 500 }, geo: { n: 'Lublin', lat: 51.25, lon: 22.57 } } }, token);
+  const [c, j] = await call('POST', '/sync', { deviceId: ID, alarms: [], agenda: { days: [{ d: day, items: [{ k: 'e', s: '09:30', e: '10:00', t: 'Dentysta', l: 'Mokotów', c: '#ff8800' }, { k: 'x', t: '<b>zły</b>', c: 'red' }, { k: 'e', s: '12:00', e: '13:00', t: 'Cudze', c: '#ff6fb5', w: 'OLA' }] }, { d: 'zła-data', items: [] }], cnt: { '2026-10-25': 3, zly: 1, '2026-10-26': 500 }, pcnt: { '2026-10-25': 2, bad: 1 }, pcol: '#ff6fb5', geo: { n: 'Lublin', lat: 51.25, lon: 22.57 } } }, token);
   assert.equal(c, 200); wt = j.widget; assert.ok(wt && wt.length > 20);
   const [c2, w] = await call('GET', `/widget/${wt}`); assert.equal(c2, 200);
-  assert.equal(w.days.length, 1); assert.equal(w.days[0].items[0].t, 'Dentysta'); assert.equal(w.days[0].items[1].c, ''); assert.equal(w.days[0].items[1].k, 'e');
-  assert.deepEqual(w.cnt, { '2026-10-25': 3, '2026-10-26': 99 }); assert.equal(w.geo.n, 'Lublin');
+  assert.equal(w.days.length, 1); assert.equal(w.days[0].items[0].t, 'Dentysta'); assert.equal(w.days[0].items[1].c, ''); assert.equal(w.days[0].items[1].k, 'e'); assert.equal(w.days[0].items[2].w, 'O'); assert.equal(w.days[0].items[0].w, '');
+  assert.deepEqual(w.cnt, { '2026-10-25': 3, '2026-10-26': 99 }); assert.equal(w.geo.n, 'Lublin'); assert.deepEqual(w.pcnt, { '2026-10-25': 2 }); assert.equal(w.pcol, '#ff6fb5');
   assert.equal((await call('GET', '/widget/zlytokenzlytokenzlytoken'))[0], 404);
   const [, j2] = await call('POST', '/sync', { deviceId: ID, alarms: [] }, token); assert.equal(j2.widget, wt, 'token stały');
   const raw = JSON.parse(fs.readFileSync(process.env.DATA_FILE, 'utf8')); assert.ok(raw.devices[ID].agenda.days[0].items[0].t === 'Dentysta');

@@ -9,7 +9,7 @@ import { nav, saveNav, setRender, rerender, toast, showBanner, confirmSheet, clo
 import { renderToday, renderCal, renderTasks, renderHub, paintWeather, bindGridDrag, bindMonthDrag, bindTray, dragState, instOf, skyPhase } from './screens.js';
 import { openQuickAdd, openEventEditor, openTaskEditor, openRuleEditor, openCatEditor, openSearch, openCitySheet, defaultDraftFor } from './editors.js';
 import { fetchPeers, onPeers, clearPeers, peersOn } from './peers.js';
-import { widgetLoaderScript, pushConfig, pushConnect, pushDisconnect, pushTest, pushSync, initPush, pushSupported } from './push.js';
+import { widgetLoaderScript, pushConfig, pushConnect, pushDisconnect, pushTest, pushSync, initPush, pushSupported, schedulePushSync } from './push.js';
 import { isStandalone } from './notify.js';
 import { tick, snooze, updateBadge, enableNotifications, testNotification, setHandlers, briefFor } from './notify.js';
 import { initLock, openLockSettings } from './lock.js';
@@ -445,7 +445,7 @@ function openPeerSheet(inst) {
     <p class="note">Tylko do odczytu. Tylko ${esc(p.name)} może zmienić ten wpis.</p>
   </div>`);
 }
-onPeers(() => render());
+onPeers(() => { render(); schedulePushSync(); });
 let lastView = peersOn();
 onChange(() => { const v = peersOn(); if (v && !lastView) fetchPeers(); lastView = v; });
 setInterval(() => { if (document.visibilityState === 'visible') fetchPeers(); }, 5 * 60000);

@@ -3,6 +3,7 @@ import { state, onChange, catOf } from './store.js';
 import { instancesInRange } from './recur.js';
 import { ymd, startOfDay, addDays, pad } from './util.js';
 import { computeAlarms, briefFor, notifPermission } from './notify.js';
+import { peerEvents } from './peers.js';
 
 const KEY = 'kalendarz.push';
 const read = () => { try { return JSON.parse(localStorage.getItem(KEY)) || null; } catch (_) { return null; } };
@@ -71,6 +72,8 @@ export function agendaPayload(now = new Date()) {
   const to = addDays(from, 7);
   const hm = (d) => `${pad(d.getHours())}:${pad(d.getMinutes())}`;
   const inst = instancesInRange(state.events, from, to);
+  const pev = peerEvents();
+  const pinst = pev.length ? instancesInRange(pev, from, to) : [];
   const days = [];
   for (let i = 0; i < 7; i++) {
     const d0 = addDays(from, i), d1 = addDays(from, i + 1), key = ymd(d0);
@@ -78,6 +81,10 @@ export function agendaPayload(now = new Date()) {
       k: 'e', ad: x.allDay ? 1 : 0, s: x.allDay ? '' : hm(x.start < d0 ? d0 : x.start), e: x.allDay ? '' : hm(x.end > d1 ? new Date(d1.getTime() - 60000) : x.end),
       t: x.title, l: x.ev.loc || '', c: (catOf(x.ev.cat) || {}).color || '', _o: x.start.getTime(),
     }));
+    for (const x of pinst) {
+      if (!(x.start < d1 && x.end > d0)) continue;
+      items.push({ k: 'e', ad: x.allDay ? 1 : 0, s: x.allDay ? '' : hm(x.start < d0 ? d0 : x.start), e: x.allDay ? '' : hm(x.end > d1 ? new Date(d1.getTime() - 60000) : x.end), t: x.title, l: x.ev.loc || '', c: x.ev.peer.color, w: x.ev.peer.name.charAt(0).toUpperCase(), _o: x.start.getTime() });
+    }
     for (const t of state.tasks) {
       if (t.done || !t.due) continue;
       if (t.due === key || (i === 0 && t.due < key)) items.push({ k: 't', ad: 0, s: t.dueTime || '', e: '', t: t.title, l: '', c: (catOf(t.cat) || {}).color || '', done: 0, _o: t.dueTime ? 0 : 9e15 });
@@ -92,8 +99,13 @@ export function agendaPayload(now = new Date()) {
     for (let d = startOfDay(x.start); d < x.end && d < far; d = addDays(d, 1)) { const k = ymd(d); cnt[k] = (cnt[k] || 0) + 1; }
   }
   for (const t of state.tasks) if (!t.done && t.due && t.due >= ymd(from) && t.due < ymd(far)) cnt[t.due] = (cnt[t.due] || 0) + 1;
+  const pcnt = {};
+  for (const x of instancesInRange(pev, from, far)) {
+    for (let d = startOfDay(x.start); d < x.end && d < far; d = addDays(d, 1)) { const k = ymd(d); pcnt[k] = (pcnt[k] || 0) + 1; }
+  }
+  const pcol = pev.length ? pev[0].peer.color : '';
   const c = state.settings.city || {};
-  return { days, cnt, geo: { n: c.name || '', lat: c.lat, lon: c.lon } };
+  return { days, cnt, pcnt, pcol, geo: { n: c.name || '', lat: c.lat, lon: c.lon } };
 }
 
 export function pushApi(path, body) {
