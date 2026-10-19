@@ -51,9 +51,10 @@ export async function sendTo(id, dev, a) {
   const payload = JSON.stringify({ title: a.title || 'Kalendarz', body: a.body || '', tag: a.tag || a.id, url: a.url || './', badge: a.badge });
   try {
     await sender(dev.sub, payload, { TTL: 3600, urgency: 'high', vapidDetails: { subject: cfg.subject, publicKey: cfg.vapidPublic, privateKey: cfg.vapidPrivate } });
+    log(`wysłano do ${id.slice(0, 6)}: „${(a.title || '').slice(0, 40)}” (${a.id.slice(0, 40)})`);
     return true;
   } catch (e) {
-    if (e.statusCode === 404 || e.statusCode === 410) { delete db.devices[id]; touch(); log(`urządzenie ${id.slice(0, 6)} wygasło (${e.statusCode}) – usunięto`); } else log(`błąd wysyłki ${e.statusCode || ''} ${e.message || e}`);
+    if (e.statusCode === 404 || e.statusCode === 410) { delete db.devices[id]; touch(); log(`urządzenie ${id.slice(0, 6)} wygasło (${e.statusCode}) – usunięto`); } else log(`błąd wysyłki ${e.statusCode || ''} ${e.message || e} ${String(e.body || '').slice(0, 120)}`);
     return false;
   }
 }
