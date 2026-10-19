@@ -10,6 +10,7 @@ import { weatherKind, cachedWeather, hourlyFor, dailyFor, isOutdoor } from './we
 import { lockOn, lockSummary } from './lock.js';
 import { dayInfo, nameDays, isoWeek, sunTimes } from './extras.js';
 import { pushConfig, pushSupported } from './push.js';
+import { peerEvents, peerList, peersOn } from './peers.js';
 import { notifPermission, notifSupported, isStandalone } from './notify.js';
 import { shortRemind, openEventEditor, defaultDraftFor, openQuickAdd, autoName } from './editors.js';
 
@@ -19,9 +20,12 @@ const plural = (n, one, few, many) => (n === 1 ? one : n % 10 >= 2 && n % 10 <= 
 const hmToMin = (s) => { const [h, m] = s.split(':').map(Number); return h * 60 + (m || 0); };
 const minOf = (d) => d.getHours() * 60 + d.getMinutes();
 
+const evs = () => { const p = peerEvents(); return p.length ? state.events.concat(p) : state.events; };
+const catOfEv = (ev) => (ev.peer ? { id: 'peer', name: ev.peer.name, color: ev.peer.color } : catOf(ev.cat));
+
 export function instOf(key) {
   const [id, date] = key.split('@');
-  const ev = state.events.find((e) => e.id === id);
+  const ev = state.events.find((e) => e.id === id) || peerEvents().find((e) => e.id === id);
   if (!ev) return null;
   const d = parseYmd(date);
   return instancesInRange([ev], addDays(d, -45), addDays(d, 2)).find((i) => i.key === key) || null;
@@ -44,7 +48,7 @@ function groupByDay(insts) {
 const repeatMini = `<span class="ico" style="width:13px;height:13px;display:inline-flex;vertical-align:-2px">${ICON.repeat}</span>`;
 
 function evRow(inst, now) {
-  const c = catOf(inst.ev.cat);
+  const c = catOfEv(inst.ev);
   const past = inst.end <= now;
   const live = inst.start <= now && inst.end > now;
   let wx = '';
@@ -52,8 +56,9 @@ function evRow(inst, now) {
     const h = hourlyFor(cachedWeather(), inst.date, inst.start.getHours());
     if (h) wx = `<span class="wx ${h.pop >= 50 ? 'wet' : ''}"><span class="ico">${wIcon(h.code)}</span>${Math.round(h.temp)}°${h.pop >= 20 ? ` · ${h.pop}%` : ''}</span>`;
   }
-  return `<button type="button" class="ev ${past ? 'past' : ''} ${live ? 'live' : ''}" style="--c:${c.color}" data-act="open-ev" data-key="${inst.key}">
-    <div class="t">${esc(inst.title)}</div>
+  const pb = inst.ev.peer ? `<span class="pbadge" style="--pc:${inst.ev.peer.color}">${esc(inst.ev.peer.name.charAt(0).toUpperCase())}</span>` : '';
+  return `<button type="button" class="ev ${past ? 'past' : ''} ${live ? 'live' : ''} ${inst.ev.peer ? 'peer' : ''}" style="--c:${c.color}" data-act="open-ev" data-key="${inst.key}">
+    <div class="t">${pb}${esc(inst.title)}${inst.ev.private && !inst.ev.peer ? `<span class="ico lockmini">${ICON.lock}</span>` : ''}</div>
     <div class="s">${inst.allDay ? '<span>Cały dzień</span>' : `<span>${fmtTime(inst.start)}–${fmtTime(inst.end)}</span>`}${inst.ev.loc ? `<span>${esc(inst.ev.loc)}</span>` : ''}${inst.recurring ? `<span>${repeatMini}</span>` : ''}${wx}</div>
   </button>`;
 }
@@ -163,7 +168,7 @@ export function renderToday() {
   const items = timed.map((i) => ({ i, sMin: clamp(minOf(i.start), ds, de), eMin: clamp(i.end.getDate() !== i.start.getDate() ? de : minOf(i.end), ds, de) })).filter((x) => x.eMin > x.sMin);
   layoutColumns(items);
   const segs = items.map((x) => {
-    const c = catOf(x.i.ev.cat);
+    const c = catOfEv(x.i.ev);
     const lh = 100 / x.cols;
     return `<i class="seg" style="--c:${c.color};left:${pct(x.sMin)}%;width:calc(${pct(x.eMin) - pct(x.sMin)}% - 2px);top:calc(${x.col * lh}% + 3px);height:calc(${lh}% - 6px)"></i>`;
   }).join('');
@@ -175,11 +180,13 @@ export function renderToday() {
   let nextHtml;
   if (!state.events.length && !state.tasks.length) {
     nextHtml = `<div class="next empty fade-in">
-      <div class="cd">Zacznij od jednego zdania</div>
-      <div class="nt" style="font-weight:500;color:var(--text2);font-size:16px">Napisz „jutro 17 siłownia" albo „co wtorek 9:30 dentysta", a ja rozpoznam datę, godzinę i powtarzanie.</div>
-      <div class="chips" style="margin-top:14px"><button type="button" class="btn primary small" data-act="quick">Dodaj pierwsze wydarzenie</button><button type="button" class="btn small" data-act="sample">Wczytaj przykłady</button></div></div>`;
+      <div class="empty-ico"><span class="ico">${ICON.sparkle}</span></div>
+      <div class="cd">Co masz dziś w planach?</div>
+      <div class="nt">Wystarczy jedno zdanie. Datę, godzinę i powtarzanie rozpoznam sam.</div>
+      <div class="ex-chips">${['jutro 17 siłownia', 'co wtorek 9:30 dentysta', 'piątek 19 kolacja u Oli'].map((t) => `<button type="button" class="ex-chip" data-act="quick-text" data-text="${esc(t)}">${esc(t)}</button>`).join('')}</div>
+      <div class="empty-act"><button type="button" class="btn primary small" data-act="quick">Dodaj wydarzenie</button><button type="button" class="btn small" data-act="sample">Wczytaj przykłady</button></div></div>`;
   } else if (nextInst) {
-    const c = catOf(nextInst.ev.cat);
+    const c = catOfEv(nextInst.ev);
     const live = nextInst.start <= now;
     const prog = live ? clamp(((now - nextInst.start) / (nextInst.end - nextInst.start)) * 100, 0, 100) : 0;
     nextHtml = `<button type="button" class="next fade-in" style="--c:${c.color};text-align:left;width:calc(100% - 32px)" data-act="open-ev" data-key="${nextInst.key}">
@@ -194,23 +201,26 @@ export function renderToday() {
       <div class="nt" style="font-weight:500;color:var(--text2);font-size:16px">${fut ? `Następne: ${esc(relDay(fut.start).toLowerCase())}${fut.allDay ? '' : ', ' + fmtTime(fut.start)}, ${esc(fut.title)}` : 'Nic więcej nie zaplanowano.'}</div></div>`;
   }
 
+  const allI = instancesInRange(evs(), today, addDays(today, 1));
+  const timedA = allI.filter((i) => !i.allDay);
+  const alldayA = allI.filter((i) => i.allDay);
   // Oś dnia
   let tl = '';
-  if (allday.length) tl += `<div class="chips" style="padding:0 20px 12px">${allday.map((i) => `<button type="button" class="chip c" style="--c:${catOf(i.ev.cat).color}" data-act="open-ev" data-key="${i.key}">${esc(i.title)}</button>`).join('')}</div>`;
-  if (timed.length) {
+  if (alldayA.length) tl += `<div class="chips" style="padding:0 20px 12px">${alldayA.map((i) => `<button type="button" class="chip c" style="--c:${catOfEv(i.ev).color}" data-act="open-ev" data-key="${i.key}">${esc(i.title)}</button>`).join('')}</div>`;
+  if (timedA.length) {
     let placed = false;
     const nowLine = `<div class="tl-now"><span>${fmtTime(now)}</span></div>`;
     tl += '<div class="tl">';
-    const pastList = timed.filter((i) => i.end <= now);
+    const pastList = timedA.filter((i) => i.end <= now);
     if (pastList.length) tl += `<div class="tl-row"><div class="tl-time"></div><button type="button" class="past-sum" data-act="toggle-past">${pastList.length} ${plural(pastList.length, 'zakończone wydarzenie', 'zakończone wydarzenia', 'zakończonych wydarzeń')}<span class="ico" style="transform:rotate(${nav.showPast ? 270 : 90}deg)">${ICON.chevR}</span></button></div>`;
-    for (const i of timed) {
+    for (const i of timedA) {
       if (i.end <= now && !nav.showPast) continue;
       if (!placed && i.start > now) { tl += nowLine; placed = true; }
       tl += `<div class="tl-row"><div class="tl-time">${fmtTime(i.start)}<small>${fmtTime(i.end)}</small></div>${evRow(i, now)}</div>`;
     }
     if (!placed) tl += nowLine;
     tl += '</div>';
-  } else if (!allday.length) tl = '<div class="empty"><b>Dzień bez planów</b>Dodaj coś zdaniem, na przykład „dziś 18 spacer".</div>';
+  } else if (!alldayA.length) tl = '<div class="empty"><b>Dzień bez planów</b>Dodaj coś zdaniem, na przykład „dziś 18 spacer".</div>';
 
   const insights = insightsFor(timed, now, today, null);
   const insHtml = insights.length ? `<div class="insights" id="insights">${insights.map((x) => `<${x.act ? 'button type="button" ' + x.act : 'div'} class="insight ${x.warn ? 'warn' : ''}"><span class="ico">${ICON[x.icon]}</span><span>${x.html}</span></${x.act ? 'button' : 'div'}>`).join('')}</div>` : '<div class="insights" id="insights"></div>';
@@ -220,17 +230,17 @@ export function renderToday() {
   const tasksHtml = dueTasks.length ? `<section class="sec"><div class="sec-h"><h2>Zadania na dziś</h2><button type="button" class="link" data-act="tab" data-tab="tasks">Wszystkie</button></div><div class="tasks">${dueTasks.slice(0, 5).map((t) => taskRow(t, tdy)).join('')}</div></section>` : '';
 
   const tomorrow = addDays(today, 1);
-  const tmw = instancesInRange(state.events, tomorrow, addDays(tomorrow, 1));
+  const tmw = instancesInRange(evs(), tomorrow, addDays(tomorrow, 1));
   const tmwHtml = tmw.length ? `<section class="sec"><div class="sec-h"><h2>Jutro</h2><button type="button" class="link" data-act="goto-day" data-date="${ymd(tomorrow)}">Zobacz dzień</button></div><div class="tl">${tmw.slice(0, 3).map((i) => `<div class="tl-row"><div class="tl-time">${i.allDay ? '' : fmtTime(i.start)}</div>${evRow(i, now)}</div>`).join('')}${tmw.length > 3 ? `<div class="empty" style="padding:6px">i ${tmw.length - 3} więcej</div>` : ''}</div></section>` : '';
 
   // Pasek tygodnia
   const ws = startOfWeek(today, s.weekStart);
-  const wk = instancesInRange(state.events, ws, addDays(ws, 7));
+  const wk = instancesInRange(evs(), ws, addDays(ws, 7));
   const byDay = groupByDay(wk);
   const strip = Array.from({ length: 7 }, (_, k) => {
     const d = addDays(ws, k);
     const list = byDay.get(ymd(d)) || [];
-    const cols = [...new Set(list.map((i) => catOf(i.ev.cat).color))].slice(0, 3);
+    const cols = [...new Set(list.map((i) => catOfEv(i.ev).color))].slice(0, 3);
     return `<button type="button" class="wd ${sameDay(d, today) ? 'today' : ''}" data-act="goto-day" data-date="${ymd(d)}"><span class="l">${DAYS_SHORT[d.getDay()]}</span><span class="n">${d.getDate()}</span><span class="dots">${cols.map((c) => `<i style="--c:${c}"></i>`).join('')}</span></button>`;
   }).join('');
 
@@ -307,7 +317,7 @@ function renderMonth() {
   const first = new Date(c.getFullYear(), c.getMonth(), 1);
   const gridStart = startOfWeek(first, ws);
   const weeks = Math.ceil((diffDays(first, gridStart) + new Date(c.getFullYear(), c.getMonth() + 1, 0).getDate()) / 7);
-  const insts = instancesInRange(state.events, gridStart, addDays(gridStart, weeks * 7));
+  const insts = instancesInRange(evs(), gridStart, addDays(gridStart, weeks * 7));
   const by = groupByDay(insts);
   const head = Array.from({ length: 7 }, (_, k) => `<div>${DAYS_SHORT[(ws + k) % 7]}</div>`).join('');
   let cells = '';
@@ -315,13 +325,13 @@ function renderMonth() {
     const d = addDays(gridStart, k);
     const list = by.get(ymd(d)) || [];
     const n = list.length;
-    const cols = [...new Set(list.map((i) => catOf(i.ev.cat).color))].slice(0, 3);
+    const cols = [...new Set(list.map((i) => catOfEv(i.ev).color))].slice(0, 3);
     const heat = n >= 5 ? 3 : n >= 3 ? 2 : n >= 1 ? 1 : 0;
     const hi = dayInfo(d);
     cells += `<button type="button" class="mcell ${hi?.off ? 'hol' : ''} ${d.getMonth() !== c.getMonth() ? 'out' : ''} ${sameDay(d, now) ? 'today' : ''} ${sameDay(d, nav.selected) ? 'sel' : ''} ${heat ? 'heat' + heat : ''}" data-act="pick-day" data-date="${ymd(d)}" aria-label="${fmtDayLong(d)}${n ? ', ' + n + ' wydarzeń' : ''}"><span class="n">${d.getDate()}</span><span class="dots">${cols.map((x) => `<i style="--c:${x}"></i>`).join('')}${n > 3 ? `<span class="more">+</span>` : ''}</span></button>`;
   }
   const sel = nav.selected;
-  const dayList = (by.get(ymd(sel)) || instancesInRange(state.events, startOfDay(sel), addDays(startOfDay(sel), 1)));
+  const dayList = (by.get(ymd(sel)) || instancesInRange(evs(), startOfDay(sel), addDays(startOfDay(sel), 1)));
   const tasks = state.tasks.filter((t) => !t.done && t.due === ymd(sel));
   const rows = dayList.map((i) => `<div class="drow"><div class="tm">${i.allDay ? '' : fmtTime(i.start)}${i.allDay ? '' : `<small>${fmtTime(i.end)}</small>`}</div>${evRow(i, now)}</div>`).join('');
   return `<div class="month"><div class="mhead">${head}</div><div class="mgrid">${cells}</div></div>
@@ -339,7 +349,7 @@ function renderGrid(ncols) {
   const days = ncols === 7 ? Array.from({ length: 7 }, (_, k) => addDays(startOfWeek(nav.cursor, ws), k)) : ncols === 3 ? [0, 1, 2].map((k) => addDays(startOfDay(nav.cursor), k)) : [startOfDay(nav.cursor)];
   const from = days[0];
   const to = addDays(days[days.length - 1], 1);
-  const insts = instancesInRange(state.events, from, to);
+  const insts = instancesInRange(evs(), from, to);
   const tight = ncols > 1;
   const narrow = ncols === 7;
 
@@ -355,7 +365,7 @@ function renderGrid(ncols) {
   const adCells = days.map((d) => {
     const k = ymd(d);
     const list = alldayItems.filter((i) => spanDates(i).includes(k));
-    return `<div>${list.map((i) => `<button type="button" class="ad" style="--c:${catOf(i.ev.cat).color}" data-act="open-ev" data-key="${i.key}">${esc(i.title)}</button>`).join('')}</div>`;
+    return `<div>${list.map((i) => `<button type="button" class="ad" style="--c:${catOfEv(i.ev).color}" data-act="open-ev" data-key="${i.key}">${esc(i.title)}</button>`).join('')}</div>`;
   }).join('');
   const allday = alldayItems.length ? `<div class="allday-row"><div></div><div class="cells" style="grid-template-columns:repeat(${ncols},1fr)">${adCells}</div></div>` : '';
 
@@ -375,15 +385,15 @@ function renderGrid(ncols) {
       .map((i) => ({ i, sMin: i.start < dayStart ? 0 : minOf(i.start), eMin: i.end >= addDays(dayStart, 1) ? 1440 : Math.max(minOf(i.end), (i.start < dayStart ? 0 : minOf(i.start)) + 15) }));
     layoutColumns(items);
     const blocks = items.map((x) => {
-      const c = catOf(x.i.ev.cat);
+      const c = catOfEv(x.i.ev);
       const top = (x.sMin / 60) * HH;
       const height = Math.max(20, ((x.eMin - x.sMin) / 60) * HH - 1);
       const left = (x.col / x.cols) * 100;
       const width = 100 / x.cols;
-      const drag = sameDay(x.i.start, x.i.end) ? 'data-drag="1"' : '';
+      const drag = sameDay(x.i.start, x.i.end) && !x.i.ev.peer ? 'data-drag="1"' : '';
       const tall = height > 44;
-      return `<button type="button" class="blk ${narrow ? 'nar' : ''}" style="--c:${c.color};top:${top}px;height:${height}px;left:calc(${left}% + 1px);width:calc(${width}% - 3px);${narrow ? 'font-size:11px;padding:3px 3px 3px 6px' : ''}" data-act="open-ev" data-key="${x.i.key}" ${drag} data-s="${x.sMin}" data-e="${x.eMin}">
-        <b>${esc(x.i.title)}</b>${narrow ? '' : `<span class="tm">${fmtTime(x.i.start)}–${fmtTime(x.i.end)}</span>${tall && x.i.ev.loc ? `<span style="display:block">${esc(x.i.ev.loc)}</span>` : ''}`}${drag ? '<i class="rs"></i>' : ''}</button>`;
+      return `<button type="button" class="blk ${narrow ? 'nar' : ''} ${x.i.ev.peer ? 'peer' : ''}" style="--c:${c.color};top:${top}px;height:${height}px;left:calc(${left}% + 1px);width:calc(${width}% - 3px);${narrow ? 'font-size:11px;padding:3px 3px 3px 6px' : ''}" data-act="open-ev" data-key="${x.i.key}" ${drag} data-s="${x.sMin}" data-e="${x.eMin}">
+        <b>${x.i.ev.peer ? `<span class="pbadge" style="--pc:${x.i.ev.peer.color}">${esc(x.i.ev.peer.name.charAt(0).toUpperCase())}</span>` : ''}${esc(x.i.title)}</b>${narrow ? '' : `<span class="tm">${fmtTime(x.i.start)}–${fmtTime(x.i.end)}</span>${tall && x.i.ev.loc ? `<span style="display:block">${esc(x.i.ev.loc)}</span>` : ''}`}${drag ? '<i class="rs"></i>' : ''}</button>`;
     }).join('');
     const nowLine = sameDay(d, now) ? `<div class="nowline" style="top:${(minOf(now) / 60) * HH}px"></div>` : '';
     return `<div class="col" data-date="${k}" style="height:${24 * HH}px">${blocks}${nowLine}</div>`;
@@ -403,7 +413,7 @@ function renderAgenda() {
   const now = new Date();
   const today = startOfDay(now);
   const to = addDays(today, nav.agendaDays);
-  const insts = instancesInRange(state.events, today, to);
+  const insts = instancesInRange(evs(), today, to);
   const by = groupByDay(insts);
   let html = '';
   let shown = 0;
@@ -662,7 +672,7 @@ export function bindMonthDrag(root) {
   const cellAt = (x, y) => document.elementFromPoint(x, y)?.closest('.mcell');
   root.addEventListener('touchstart', (e) => {
     const b = e.target.closest('.dlist .ev');
-    if (!b) return;
+    if (!b || b.classList.contains('peer')) return;
     const p = pt(e);
     st = { b, x0: p.clientX, y0: p.clientY, active: false };
     st.timer = setTimeout(() => {
@@ -705,7 +715,7 @@ export function bindMonthDrag(root) {
     const p = pt(e);
     const cell = cellAt(p.clientX, p.clientY);
     const inst = instOf(s.b.dataset.key);
-    if (cell && inst) moveInstToDay(inst, parseYmd(cell.dataset.date));
+    if (cell && inst && !inst.ev.peer) moveInstToDay(inst, parseYmd(cell.dataset.date));
   };
   root.addEventListener('touchend', end);
   root.addEventListener('touchcancel', end);
@@ -738,6 +748,21 @@ export function renderTasks() {
 
 // ---------- Centrum ----------
 const sw = (path, on) => `<button type="button" class="switch ${on ? 'on' : ''}" role="switch" aria-checked="${on}" data-tog="${path}"></button>`;
+
+const SHARE_COLORS = ['#34d3ff', '#ff6fb5', '#3fd08a', '#ffbf3f', '#9a6bff', '#ff6a6a', '#3ee0c8', '#a9a9c4'];
+function shareSection() {
+  const sh = state.settings.share;
+  const peers = peerList();
+  const sw = (path, on) => `<button type="button" class="switch ${on ? 'on' : ''}" role="switch" aria-checked="${on}" data-tog="${path}"></button>`;
+  const sub = !sh.name ? 'Wpisz swoje imię, żeby inni widzieli, czyje to wpisy.' : peers.length ? `Widzisz: ${peers.map((p) => esc(p.name)).join(', ')}` : sh.view ? 'Nikt jeszcze nie udostępnia kalendarza.' : 'Włącz, żeby zobaczyć wpisy drugiej osoby.';
+  return `<section class="sec"><div class="sec-h"><h2>Wspólny kalendarz</h2></div>
+    <div class="list">
+      <div class="row"><span class="ico">${ICON.today}</span><span class="rt"><b>Moje imię</b><small>Tak będą podpisane Twoje wpisy</small></span><input type="text" data-in="share.name" value="${esc(sh.name)}" maxlength="24" placeholder="np. Marek" autocapitalize="words" autocomplete="off" style="max-width:130px;text-align:right" aria-label="Moje imię"></div>
+      <div class="row" style="flex-wrap:wrap"><span class="rt"><b>Mój kolor</b></span><div class="chips">${SHARE_COLORS.map((c) => `<button type="button" class="chip ${sh.color === c ? 'on' : ''}" style="padding:0;width:34px;justify-content:center;background:${c}" data-act="share-color" data-v="${c}" aria-label="Kolor ${c}">${sh.color === c ? `<span class="ico" style="color:#fff">${ICON.check}</span>` : ''}</button>`).join('')}</div></div>
+      <div class="row"><span class="ico">${ICON.cal}</span><span class="rt"><b>Udostępniaj mój kalendarz</b><small>Inni zobaczą Twoje wydarzenia (prywatne jako „Zajęte")</small></span>${sw('share.on', sh.on)}</div>
+      <div class="row"><span class="ico">${ICON.today}</span><span class="rt"><b>Pokaż kalendarz drugiej osoby</b><small>${sub}</small></span>${sw('share.view', sh.view)}</div>
+    </div></section>`;
+}
 
 export function renderHub() {
   const s = state.settings;
@@ -801,6 +826,7 @@ export function renderHub() {
       <div class="row"><span class="ico">${ICON.today}</span><span class="rt"><b>Licznik na ikonie</b><small>Ile rzeczy czeka dziś</small></span><select data-in="badge" aria-label="Licznik na ikonie"><option value="off" ${s.badge === 'off' ? 'selected' : ''}>Wyłączony</option><option value="events" ${s.badge === 'events' ? 'selected' : ''}>Wydarzenia</option><option value="all" ${s.badge === 'all' ? 'selected' : ''}>Wydarzenia i zadania</option></select></div>
       <div class="row"><span class="ico">${ICON.clock}</span><span class="rt"><b>Domyślne przypomnienie</b><small>Dla nowych wydarzeń</small></span><select data-in="defaultRemind" data-arr="1" aria-label="Domyślne przypomnienie">${[[[], 'Brak'], [[0], 'W chwili startu'], [[5], '5 min'], [[10], '10 min'], [[15], '15 min'], [[30], '30 min'], [[60], '1 godz.']].map(([v, l]) => `<option value='${JSON.stringify(v)}' ${JSON.stringify(s.defaultRemind) === JSON.stringify(v) ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
     </div>
+    ${pcfg ? shareSection() : ''}
     ${!standalone ? `<p class="note"><b>Instalacja:</b> w Safari dotknij Udostępnij, potem „Dodaj do ekranu początkowego". Dopiero wtedy iOS pozwala na powiadomienia i licznik na ikonie.</p>` : ''}
     <p class="note">Wibracje przy powiadomieniach zależą od systemu: w Ustawienia, Dźwięki i haptyka, włącz „Odtwarzaj haptykę w trybie cichym".</p>
   </section>

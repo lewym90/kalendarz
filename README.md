@@ -43,3 +43,7 @@ Po połączeniu z serwerem aplikacja wysyła mu plan dnia na 7 dni. Serwer udost
 `npm test` (Node 22, bez zależności): parser zdań, powtarzanie, święta, import .ics, wolne terminy, podział serii.
 
 Widget średni (pełna szerokość) pokazuje miniaturę miesiąca z zaznaczonym dniem, pogodę (Open-Meteo, miejsce z ustawień aplikacji) i plan dnia; tło to ciemne, półprzezroczyste szkło. Parametr widgetu `slate` daje chłodny grafit jak w widgecie Pogoda.
+
+### Wspólny kalendarz
+
+W Centrum, po połączeniu z serwerem, sekcja „Wspólny kalendarz”: ustawiasz imię i kolor, a przełącznikami decydujesz, czy udostępniasz swój kalendarz i czy widzisz cudzy. Wpisy drugiej osoby są tylko do odczytu, mają jej kolor i literę imienia, a wydarzenia oznaczone jako prywatne pokazują się jako „Zajęte”. Serwer (`/sync` z polem `share`, `/peers`) trzyma to osobno dla każdego urządzenia; wszystkie urządzenia połączone tym samym kodem widzą nawzajem swoje kalendarze.

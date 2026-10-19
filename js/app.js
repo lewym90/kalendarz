@@ -8,6 +8,7 @@ import { instancesInRange } from './recur.js';
 import { nav, saveNav, setRender, rerender, toast, showBanner, confirmSheet, closeTopSheet, sheetOpen, openSheet, closeSheet } from './ui.js';
 import { renderToday, renderCal, renderTasks, renderHub, paintWeather, bindGridDrag, bindMonthDrag, bindTray, dragState, instOf, skyPhase } from './screens.js';
 import { openQuickAdd, openEventEditor, openTaskEditor, openRuleEditor, openCatEditor, openSearch, openCitySheet, defaultDraftFor } from './editors.js';
+import { fetchPeers, onPeers, clearPeers, peersOn } from './peers.js';
 import { widgetLoaderScript, pushConfig, pushConnect, pushDisconnect, pushTest, pushSync, initPush, pushSupported } from './push.js';
 import { isStandalone } from './notify.js';
 import { tick, snooze, updateBadge, enableNotifications, testNotification, setHandlers, briefFor } from './notify.js';
@@ -75,7 +76,7 @@ function render() {
   const key = nav.tab + (nav.tab === 'cal' ? ':' + nav.calView : '');
   const scroll = view.scrollTop;
   const html = nav.tab === 'today' ? renderToday() : nav.tab === 'cal' ? renderCal() : nav.tab === 'tasks' ? renderTasks() : renderHub();
-  const anim = key !== lastKey ? 'tab' : nextAnim;
+  const anim = key !== lastKey ? (lastKey ? 'tab' : '') : nextAnim;
   nextAnim = '';
   clearTimeout(animT);
   if (anim) { view.dataset.anim = anim; animT = setTimeout(() => { delete view.dataset.anim; }, 650); } else delete view.dataset.anim;
@@ -189,11 +190,14 @@ const actions = {
     render();
   },
   quick() { haptic(); openQuickAdd(); },
+  'quick-text'(el) { haptic(); openQuickAdd({ text: el.dataset.text }); },
   sample() { loadSample(); toast('Wczytano przykładowe dane'); },
   'open-ev'(el) {
     const inst = instOf(el.dataset.key);
+    if (inst && inst.ev.peer) return openPeerSheet(inst);
     if (inst) openEventEditor({ inst });
   },
+  'share-color'(el) { haptic(); state.settings.share.color = el.dataset.v; save(); },
   'open-task'(el) { openTaskEditor({ id: el.dataset.id }); },
   'toggle-task'(el) {
     const id = el.dataset.id;
@@ -262,7 +266,7 @@ const actions = {
       catch (e) { q('#pc-err').textContent = e.message || 'Nie udało się połączyć'; q('#pc-err').hidden = false; b.disabled = false; b.textContent = 'Połącz'; }
     };
   },
-  async 'push-disconnect'() { await pushDisconnect(); toast('Rozłączono'); render(); },
+  async 'push-disconnect'() { await pushDisconnect(); clearPeers(); toast('Rozłączono'); render(); },
   async 'copy-widget'() {
     if (!pushConfig()?.widget) await pushSync(true);
     const code = widgetLoaderScript();
@@ -329,7 +333,19 @@ document.addEventListener('change', (e) => {
   else if (t.dataset.num) v = Number(v);
   setPath(state.settings, path, v);
   applyTheme();
-  save();
+  save(true);
+  settingsDirty = true;
+});
+let settingsDirty = false;
+let settingsT = 0;
+document.addEventListener('focusin', () => clearTimeout(settingsT));
+document.addEventListener('focusout', () => {
+  if (!settingsDirty) return;
+  clearTimeout(settingsT);
+  settingsT = setTimeout(() => {
+    if (document.activeElement && /INPUT|SELECT|TEXTAREA/.test(document.activeElement.tagName)) return;
+    settingsDirty = false; save();
+  }, 350);
 });
 
 document.addEventListener('submit', (e) => {
@@ -405,22 +421,42 @@ function softRefresh() {
   if (nav.tab === 'today' || (nav.tab === 'cal' && (nav.calView === 'day' || nav.calView === 'week' || nav.calView === '3day'))) { lastPaint = Date.now(); render(); }
 }
 
+let hiddenAt = 0;
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState !== 'visible') { flushSave(); return; }
+  if (document.visibilityState !== 'visible') { hiddenAt = Date.now(); flushSave(); return; }
+  if (hiddenAt && Date.now() - hiddenAt > 15000 && nav.tab !== 'today' && !sheetOpen()) { nav.tab = 'today'; nav.selected = startOfDay(new Date()); nav.cursor = nav.selected; saveNav(); render(); }
   rolloverTasks();
   everyTick();
   lastPaint = 0;
   softRefresh();
   refreshWeather();
+  fetchPeers();
 });
 
 initPush();
+function openPeerSheet(inst) {
+  const p = inst.ev.peer;
+  const when = inst.allDay ? `${fmtDayLong(inst.start)}, cały dzień` : `${fmtDayLong(inst.start)}, ${fmtTime(inst.start)}–${fmtTime(inst.end)}`;
+  openSheet(`<div class="grab"><i></i></div><div class="sheet-b" style="padding-top:4px">
+    <div class="peer-who"><span class="pbadge big" style="--pc:${p.color}">${esc(p.name.charAt(0).toUpperCase())}</span><span>Wpis: <b>${esc(p.name)}</b></span></div>
+    <h2 class="peer-t">${esc(inst.title)}</h2>
+    <div class="peer-m"><span class="ico">${ICON.clock}</span>${esc(when)}</div>
+    ${inst.ev.loc ? `<div class="peer-m"><span class="ico">${ICON.pin || ICON.cal}</span>${esc(inst.ev.loc)}</div>` : ''}
+    <p class="note">Tylko do odczytu. Tylko ${esc(p.name)} może zmienić ten wpis.</p>
+  </div>`);
+}
+onPeers(() => render());
+let lastView = peersOn();
+onChange(() => { const v = peersOn(); if (v && !lastView) fetchPeers(); lastView = v; });
+setInterval(() => { if (document.visibilityState === 'visible') fetchPeers(); }, 5 * 60000);
+setTimeout(() => fetchPeers(), 1500);
 onChange(() => { lastPaint = Date.now(); render(); updateBadge(); });
 
 bindMonthDrag(view);
 bindTray(view);
 
 // ---------- Start ----------
+nav.tab = 'today';
 applyTheme();
 initLock();
 rolloverTasks();

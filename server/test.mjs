@@ -67,4 +67,25 @@ await t('limit urządzeń i wyrejestrowanie', async () => {
   assert.equal((await call('POST', '/subscribe', { deviceId: 'dev_x_0123456789abcdef', setup: 'KOD123', subscription: sub }))[0], 403);
   assert.equal((await call('POST', '/unsubscribe', { deviceId: 'dev_0_0123456789abcd' }, toks[0]))[0], 200);
 });
+await t('wspólny kalendarz: publikacja, odczyt, prywatność, ten sam autor pominięty', async () => {
+  const mk = async (id) => { const [, j] = await call('POST', '/subscribe', { deviceId: id, setup: 'KOD123', subscription: sub }); return j.token; };
+  await call('POST', '/unsubscribe', { deviceId: 'dev_1_0123456789abcd' }, undefined);
+  const A = 'share_A_0123456789abc', B = 'share_B_0123456789abc', B2 = 'share_B2_0123456789ab';
+  for (const d of Object.keys(S.getDb().devices)) delete S.getDb().devices[d];
+  const ta = await mk(A), tb = await mk(B), tb2 = await mk(B2);
+  const ev = [{ d: '2026-10-21', s: '10:00', ed: '2026-10-21', e: '11:00', t: 'Dentysta', l: 'Mokotów' }, { d: '2026-10-22', ad: 1, ed: '2026-10-24', t: 'Urlop' }, { d: '2026-10-23', s: '19:00', e: '20:00', t: 'Tajne', l: 'Hotel', p: 1 }, { d: 'zla', t: 'x' }];
+  assert.equal((await call('POST', '/sync', { deviceId: A, alarms: [], share: { name: 'Ola', color: '#ff6fb5', events: ev } }, ta))[0], 200);
+  assert.equal((await call('POST', '/sync', { deviceId: B, alarms: [], share: { name: 'Marek', color: 'zly', events: [] } }, tb))[0], 200);
+  assert.equal((await call('POST', '/sync', { deviceId: B2, alarms: [], share: { name: 'marek', color: '#3aa0ff', events: [] } }, tb2))[0], 200);
+  const [c, j] = await call('POST', '/peers', { deviceId: B }, tb); assert.equal(c, 200);
+  assert.equal(j.peers.length, 1, 'drugie urządzenie Marka pominięte'); const o = j.peers[0];
+  assert.equal(o.name, 'Ola'); assert.equal(o.color, '#ff6fb5'); assert.equal(o.events.length, 3);
+  assert.equal(o.events[2].t, ''); assert.equal(o.events[2].l, ''); assert.equal(o.events[2].p, 1);
+  assert.equal(o.events[1].ad, 1); assert.equal(o.events[1].ed, '2026-10-24');
+  assert.ok(!JSON.stringify(j).includes('Hotel') && !JSON.stringify(j).includes('Tajne'), 'prywatne nie opuszczają serwera');
+  assert.equal((await call('POST', '/peers', { deviceId: B }))[0], 401);
+  const [, o2] = await call('POST', '/peers', { deviceId: A }, ta); assert.equal(o2.peers.length, 1); assert.equal(o2.peers[0].color, '#3aa0ff', 'z duplikatów imienia wygrywa najnowsze urządzenie'); assert.equal(S.cleanShare({ name: 'x', color: 'zly' }).color, '#34d3ff', 'zły kolor zastąpiony domyślnym');
+  await call('POST', '/sync', { deviceId: A, alarms: [], share: null }, ta);
+  assert.equal((await call('POST', '/peers', { deviceId: B }, tb))[1].peers.length, 0, 'wyłączenie udostępniania usuwa dane');
+});
 srv.close(); console.log(`\n${ok} testów serwera OK`); process.exit(0);

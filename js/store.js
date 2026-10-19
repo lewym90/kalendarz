@@ -41,6 +41,7 @@ const DEFAULT_SETTINGS = {
   skin: 'dusk',
   accentCustom: '',
   welcomed: false,
+  share: { on: true, view: false, name: '', color: '#34d3ff' },
 };
 
 function fresh() {
@@ -143,6 +144,7 @@ export function newEvent(partial = {}) {
     rrule: null, // {freq, interval, byday, until}
     reminders: [...state.settings.defaultRemind],
     exdates: [],
+    private: false,
     ...partial,
   };
 }
@@ -339,7 +341,7 @@ export function importData(text) {
   if (!d || !Array.isArray(d.events)) throw new Error('To nie wygląda na kopię kalendarza.');
   snapshot();
   const base = fresh();
-  Object.assign(state, base, d, { settings: { ...base.settings, ...(d.settings || {}) } });
+  Object.assign(state, base, d, { settings: { ...base.settings, ...(d.settings || {}), share: { ...base.settings.share, ...((d.settings || {}).share || {}) } } });
   save();
 }
 

@@ -125,6 +125,20 @@ export function cleanAgenda(a) {
   return { gen: Date.now(), days, cnt, geo };
 }
 
+const RE_D = /^\d{4}-\d{2}-\d{2}$/;
+const RE_T = /^\d{2}:\d{2}$/;
+// Wspólny kalendarz: urządzenie publikuje swoje wydarzenia (prywatne bez tytułu); inne urządzenia je tylko czytają.
+export function cleanShare(a) {
+  if (!a || typeof a !== 'object') return null;
+  const name = str(a.name, 24).trim();
+  if (!name) return null;
+  const events = (Array.isArray(a.events) ? a.events : []).slice(0, 900).filter((x) => x && RE_D.test(x.d || '')).map((x) => ({
+    d: x.d, s: RE_T.test(x.s || '') ? x.s : '', ed: RE_D.test(x.ed || '') ? x.ed : x.d, e: RE_T.test(x.e || '') ? x.e : '', ad: x.ad ? 1 : 0,
+    t: x.p ? '' : str(x.t, 100), l: x.p ? '' : str(x.l, 60), p: x.p ? 1 : 0,
+  }));
+  return { name, color: /^#[0-9a-fA-F]{6}$/.test(a.color || '') ? a.color : '#34d3ff', events, gen: Date.now() };
+}
+
 export async function handle(method, url, headers, body) {
   const route = url.split('?')[0].replace(/\/+$/, '') || '/';
   if (method === 'GET' && route === '/health') return [200, { ok: true, devices: Object.keys(db.devices).length }];
@@ -161,9 +175,20 @@ export async function handle(method, url, headers, body) {
     dev.alarms = list.filter((a) => !(dev.sent || {})[a.id]);
     const ag = cleanAgenda(body.agenda);
     if (ag) dev.agenda = ag;
+    if (body.share === null) delete dev.share;
+    else if (body.share) { const sh = cleanShare(body.share); if (sh) dev.share = sh; }
     if (!dev.wtoken) dev.wtoken = crypto.randomBytes(24).toString('base64url');
     dev.sync = now; touch(); saveDb();
     return [200, { ok: true, queued: dev.alarms.length, widget: dev.wtoken }];
+  }
+  if (method === 'POST' && route === '/peers') {
+    const me = (dev.share && dev.share.name || '').toLowerCase();
+    const peers = Object.entries(db.devices)
+      .filter(([k, d]) => k !== id && d.share && d.share.name.toLowerCase() !== me)
+      .map(([k, d]) => ({ id: sha(k).slice(0, 10), name: d.share.name, color: d.share.color, gen: d.share.gen, events: d.share.events }))
+      .sort((x, y) => y.gen - x.gen);
+    const seen = new Set();
+    return [200, { peers: peers.filter((x) => { const n = x.name.toLowerCase(); if (seen.has(n)) return false; seen.add(n); return true; }), now: Date.now() }];
   }
   if (method === 'POST' && route === '/unsubscribe') { delete db.devices[id]; touch(); saveDb(); return [200, { ok: true }]; }
   if (method === 'POST' && route === '/test') {

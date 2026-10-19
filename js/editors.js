@@ -223,6 +223,7 @@ export function openEventEditor({ inst = null, ev = null, draft = null } = {}) {
     scope: 'series',
     bday: !!base.bday,
     byear: base.byear || null,
+    priv: !!base.private,
   };
   const recurringExisting = !!(existing && existing.rrule);
   const isNew = !existing;
@@ -258,6 +259,7 @@ export function openEventEditor({ inst = null, ev = null, draft = null } = {}) {
         ${d.rrule.freq === 'weekly' ? `<div class="dayrow" style="margin-bottom:8px">${dow.map((x) => `<button type="button" class="${byday.includes(x) ? 'on' : ''}" data-dow="${x}">${DAYS_SHORT[x] === 'ndz' ? 'nd' : DAYS_SHORT[x]}</button>`).join('')}</div>` : ''}
         <div class="field"><label class="grow">Do dnia (opcjonalnie)</label><input id="e-until" type="date" value="${d.rrule.until || ''}"></div>` : ''}
       <div class="field" style="margin-top:12px"><span class="ico">${ICON.sparkle}</span><label class="grow">To urodziny<small style="display:block;color:var(--text2);font-size:12.5px">Co roku, z wiekiem w tytule</small></label><button type="button" class="switch ${d.bday ? 'on' : ''}" role="switch" aria-checked="${!!d.bday}" data-t="bday"></button></div>
+      <div class="field"><span class="ico">${ICON.lock}</span><label class="grow">Prywatne<small style="display:block;color:var(--text2);font-size:12.5px">Druga osoba zobaczy tylko „Zajęte", bez tytułu</small></label><button type="button" class="switch ${d.priv ? 'on' : ''}" role="switch" aria-checked="${!!d.priv}" data-t="priv"></button></div>
       ${d.bday ? `<div class="field"><label class="grow">Rok urodzenia (opcjonalnie)</label><input id="e-byear" type="number" inputmode="numeric" min="1900" max="2100" placeholder="np. 1990" value="${d.byear || ''}" style="max-width:100px;text-align:right"></div>` : ''}
       <div class="lbl">Przypomnienia</div>
       <div class="chips">${REMIND_OPTS.map((m) => `<button type="button" class="chip ${d.reminders.includes(m) ? 'on' : ''}" data-r="${m}">${m === 0 ? 'W chwili startu' : shortRemind(m)}</button>`).join('')}</div>
@@ -369,6 +371,7 @@ export function openEventEditor({ inst = null, ev = null, draft = null } = {}) {
       haptic();
       return redraw();
     }
+    if (t.dataset.t === 'priv') { d.priv = !d.priv; haptic(); redraw(); return; }
     if (t.dataset.t === 'bday') {
       d.bday = !d.bday;
       if (d.bday) {
@@ -419,7 +422,7 @@ export function openEventEditor({ inst = null, ev = null, draft = null } = {}) {
         ti.animate([{ transform: 'translateX(0)' }, { transform: 'translateX(-6px)' }, { transform: 'translateX(6px)' }, { transform: 'translateX(0)' }], { duration: 240 });
         return;
       }
-      const common = { title: d.title.trim(), cat: d.cat, loc: d.loc.trim(), notes: d.notes.trim(), reminders: [...new Set(d.reminders)].sort((a, b) => a - b), allDay: d.allDay, bday: !!d.bday, byear: d.bday ? d.byear || null : null };
+      const common = { title: d.title.trim(), cat: d.cat, loc: d.loc.trim(), notes: d.notes.trim(), reminders: [...new Set(d.reminders)].sort((a, b) => a - b), allDay: d.allDay, private: !!d.priv, bday: !!d.bday, byear: d.bday ? d.byear || null : null };
       const rr = d.rrule ? { ...d.rrule, byday: d.rrule.freq === 'weekly' ? (d.rrule.byday?.length ? d.rrule.byday : [d.s.getDay()]) : [], until: d.rrule.until || null } : null;
       if (isNew) {
         const evn = newEvent({ ...common, start: fmtDT(d.s), end: fmtDT(d.e), rrule: rr });

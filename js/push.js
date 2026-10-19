@@ -96,16 +96,37 @@ export function agendaPayload(now = new Date()) {
   return { days, cnt, geo: { n: c.name || '', lat: c.lat, lon: c.lon } };
 }
 
+export function pushApi(path, body) {
+  const cfg = read();
+  if (!cfg || !cfg.token) return Promise.reject(new Error('brak połączenia z serwerem'));
+  return api(cfg, path, { deviceId: cfg.deviceId, ...body });
+}
+
+// Wspólny kalendarz: moje wydarzenia na ~4 miesiące; prywatne bez tytułu i miejsca.
+export function sharePayload(now = new Date()) {
+  const sh = state.settings.share || {};
+  const name = String(sh.name || '').trim();
+  if (!sh.on || !name) return null;
+  const from = addDays(startOfDay(now), -7), to = addDays(startOfDay(now), 120);
+  const hm = (d) => `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  const events = instancesInRange(state.events, from, to).slice(0, 900).map((x) => {
+    const last = new Date(x.end.getTime() - 1);
+    return { d: ymd(x.start), s: x.allDay ? '' : hm(x.start), ed: ymd(x.allDay ? last : x.end), e: x.allDay ? '' : hm(x.end), ad: x.allDay ? 1 : 0, p: x.ev.private ? 1 : 0, t: x.ev.private ? '' : x.title, l: x.ev.private ? '' : (x.ev.loc || '') };
+  });
+  return { name, color: sh.color, events };
+}
+
 let lastSig = '';
 export async function pushSync(force = false) {
   const cfg = read();
-  if (!cfg || !cfg.token || !state.settings.notifyEnabled) return false;
-  const alarms = alarmsPayload();
+  if (!cfg || !cfg.token) return false;
+  const alarms = state.settings.notifyEnabled ? alarmsPayload() : [];
   const agenda = agendaPayload();
-  const sig = JSON.stringify([alarms, agenda]);
+  const share = sharePayload();
+  const sig = JSON.stringify([alarms, agenda, share]);
   if (!force && sig === lastSig) return true;
   try {
-    const res = await api(cfg, '/sync', { deviceId: cfg.deviceId, alarms, agenda });
+    const res = await api(cfg, '/sync', { deviceId: cfg.deviceId, alarms, agenda, share });
     lastSig = sig;
     if (res.widget) cfg.widget = res.widget;
     cfg.syncedAt = Date.now(); cfg.error = '';
