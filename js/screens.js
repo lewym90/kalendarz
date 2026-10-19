@@ -3,10 +3,12 @@ import {
   esc, ymd, parseYmd, parseDT, fmtTime, pad, addDays, addMinutes, startOfDay, startOfWeek, sameDay, diffDays, relDay, fmtDayLong, fmtDayMid, fmtCountdown, fmtDuration, clamp, ICON,
   DAYS_FULL, DAYS_SHORT, DAYS_LETTER, MONTHS, MONTHS_GEN, MONTHS_SHORT, capFirst, haptic,
 } from './util.js';
-import { state, catOf, effectiveReminders, updateEvent, detachOccurrence, undo, describeRule as describeRuleDef } from './store.js';
+import { state, catOf, effectiveReminders, updateEvent, detachOccurrence, undo, newEvent, addEvent, updateTask, batch, describeRule as describeRuleDef } from './store.js';
 import { instancesInRange, layoutColumns, describeRule } from './recur.js';
 import { nav, toast, rerender } from './ui.js';
-import { weatherKind } from './weather.js';
+import { weatherKind, cachedWeather, hourlyFor, dailyFor, isOutdoor } from './weather.js';
+import { lockOn, lockSummary } from './lock.js';
+import { dayInfo, nameDays, isoWeek, sunTimes } from './extras.js';
 import { notifPermission, notifSupported, isStandalone } from './notify.js';
 import { shortRemind, openEventEditor, defaultDraftFor, openQuickAdd, autoName } from './editors.js';
 
@@ -44,9 +46,14 @@ function evRow(inst, now) {
   const c = catOf(inst.ev.cat);
   const past = inst.end <= now;
   const live = inst.start <= now && inst.end > now;
+  let wx = '';
+  if (!inst.allDay && !past && isOutdoor(inst.ev)) {
+    const h = hourlyFor(cachedWeather(), inst.date, inst.start.getHours());
+    if (h) wx = `<span class="wx ${h.pop >= 50 ? 'wet' : ''}"><span class="ico">${wIcon(h.code)}</span>${Math.round(h.temp)}°${h.pop >= 20 ? ` · ${h.pop}%` : ''}</span>`;
+  }
   return `<button type="button" class="ev ${past ? 'past' : ''} ${live ? 'live' : ''}" style="--c:${c.color}" data-act="open-ev" data-key="${inst.key}">
-    <div class="t">${esc(inst.ev.title)}</div>
-    <div class="s">${inst.allDay ? '<span>Cały dzień</span>' : `<span>${fmtTime(inst.start)}–${fmtTime(inst.end)}</span>`}${inst.ev.loc ? `<span>${esc(inst.ev.loc)}</span>` : ''}${inst.recurring ? `<span>${repeatMini}</span>` : ''}</div>
+    <div class="t">${esc(inst.title)}</div>
+    <div class="s">${inst.allDay ? '<span>Cały dzień</span>' : `<span>${fmtTime(inst.start)}–${fmtTime(inst.end)}</span>`}${inst.ev.loc ? `<span>${esc(inst.ev.loc)}</span>` : ''}${inst.recurring ? `<span>${repeatMini}</span>` : ''}${wx}</div>
   </button>`;
 }
 
@@ -66,6 +73,21 @@ function taskRow(t, today = ymd(new Date())) {
 
 const wIcon = (code) => ICON[weatherKind(code).icon] || ICON.cloud;
 
+// Święto, imieniny, wschód i zachód słońca dla wybranego dnia.
+function dayMeta(d, { sun = true, week = false } = {}) {
+  const parts = [];
+  const info = dayInfo(d);
+  if (info) parts.push(`<span class="dm hol ${info.off ? 'off' : ''}">${esc(info.name)}</span>`);
+  const nd = nameDays(d);
+  if (nd) parts.push(`<span class="dm">Imieniny: ${esc(nd.split(', ').slice(0, 3).join(', '))}</span>`);
+  if (sun) {
+    const st = sunTimes(d, state.settings.city.lat, state.settings.city.lon);
+    if (st) parts.push(`<span class="dm sun"><span class="ico">${ICON.sun}</span>${fmtTime(st.rise)} – ${fmtTime(st.set)}</span>`);
+  }
+  if (week) parts.push(`<span class="dm">tydzień ${isoWeek(d)}</span>`);
+  return parts.join('');
+}
+
 // ---------- Dziś ----------
 export function skyPhase(now) {
   const h = now.getHours();
@@ -84,7 +106,7 @@ function insightsFor(timed, now, today, weather) {
       const a = timed[i];
       const b = timed[j];
       if (b.start < a.end && b.end > now) {
-        out.push({ warn: true, icon: 'alert', html: `<b>Nakładają się:</b> ${esc(a.ev.title)} i ${esc(b.ev.title)} (${fmtTime(b.start)})`, act: `data-act="open-ev" data-key="${b.key}"` });
+        out.push({ warn: true, icon: 'alert', html: `<b>Nakładają się:</b> ${esc(a.title)} i ${esc(b.title)} (${fmtTime(b.start)})`, act: `data-act="open-ev" data-key="${b.key}"` });
         break;
       }
     }
@@ -104,7 +126,7 @@ function insightsFor(timed, now, today, weather) {
     if (dayEnd - cur >= 90) gaps.push([cur, dayEnd]);
     if (gaps.length) {
       const f = (m) => `${pad(Math.floor(m / 60))}:${pad(m % 60)}`;
-      out.push({ icon: 'clock', html: `<b>Wolne okna:</b> ${gaps.slice(0, 2).map(([a, b]) => `${f(a)}–${f(b)}`).join(' i ')}` });
+      out.push({ icon: 'clock', act: 'data-act="find-slot"', html: `<b>Wolne okna:</b> ${gaps.slice(0, 2).map(([a, b]) => `${f(a)}–${f(b)}`).join(' i ')}` });
     }
   }
   const booked = timed.reduce((s, i) => s + (i.end - i.start) / 60000, 0);
@@ -122,14 +144,19 @@ export function renderToday() {
   const phase = skyPhase(now);
   const hr = now.getHours() + now.getMinutes() / 60;
   const p = hr >= 6 && hr < 20 ? (hr - 6) / 14 : ((hr - 20 + 24) % 24) / 10;
-  const orbX = 14 + p * 72;
-  const orbY = 30 - Math.sin(p * Math.PI) * 22;
+  const orbX = 22 + p * 66;
+  const orbY = 66 - Math.sin(p * Math.PI) * 22;
   const stars = phase === 'night' ? 1 : phase === 'dawn' || phase === 'dusk' ? 0.35 : 0;
   const greet = hr < 5 ? 'Późna pora' : hr < 18 ? 'Dzień dobry' : hr < 23 ? 'Dobry wieczór' : 'Dobranoc';
 
   // Pasek dnia
-  const ds = hmToMin(s.dayStart);
-  const de = hmToMin(s.dayEnd);
+  let ds = hmToMin(s.dayStart);
+  let de = hmToMin(s.dayEnd);
+  for (const i of timed) {
+    ds = Math.min(ds, Math.floor(minOf(i.start) / 60) * 60);
+    de = Math.max(de, i.end.getDate() !== i.start.getDate() ? 1440 : Math.ceil(minOf(i.end) / 60) * 60);
+  }
+  ds = Math.max(0, ds); de = Math.min(1440, de);
   const total = Math.max(60, de - ds);
   const pct = (m) => clamp(((m - ds) / total) * 100, 0, 100);
   const items = timed.map((i) => ({ i, sMin: clamp(minOf(i.start), ds, de), eMin: clamp(i.end.getDate() !== i.start.getDate() ? de : minOf(i.end), ds, de) })).filter((x) => x.eMin > x.sMin);
@@ -156,22 +183,22 @@ export function renderToday() {
     const prog = live ? clamp(((now - nextInst.start) / (nextInst.end - nextInst.start)) * 100, 0, 100) : 0;
     nextHtml = `<button type="button" class="next fade-in" style="--c:${c.color};text-align:left;width:calc(100% - 32px)" data-act="open-ev" data-key="${nextInst.key}">
       <div class="cd">${live ? 'Trwa teraz' : fmtCountdown(nextInst.start - now)}${live ? `<small>koniec ${fmtCountdown(nextInst.end - now).replace('za ', 'za ')}</small>` : ''}</div>
-      <div class="nt">${esc(nextInst.ev.title)}</div>
+      <div class="nt">${esc(nextInst.title)}</div>
       <div class="meta"><span><span class="ico">${ICON.clock}</span>${fmtTime(nextInst.start)}–${fmtTime(nextInst.end)}</span>${nextInst.ev.loc ? `<span><span class="ico">${ICON.pin}</span>${esc(nextInst.ev.loc)}</span>` : ''}<span>${esc(c.name)}</span></div>
       ${live ? `<div class="prog"><i style="width:${prog}%"></i></div>` : ''}
     </button>`;
   } else {
     const fut = instancesInRange(state.events, addDays(today, 1), addDays(today, 30)).find((i) => !i.allDay) || instancesInRange(state.events, addDays(today, 1), addDays(today, 30))[0];
     nextHtml = `<div class="next empty fade-in"><div class="cd">${timed.length || allday.length ? 'Na dziś to już wszystko' : 'Dziś masz wolne'}</div>
-      <div class="nt" style="font-weight:500;color:var(--text2);font-size:16px">${fut ? `Następne: ${esc(relDay(fut.start).toLowerCase())}${fut.allDay ? '' : ', ' + fmtTime(fut.start)}, ${esc(fut.ev.title)}` : 'Nic więcej nie zaplanowano.'}</div></div>`;
+      <div class="nt" style="font-weight:500;color:var(--text2);font-size:16px">${fut ? `Następne: ${esc(relDay(fut.start).toLowerCase())}${fut.allDay ? '' : ', ' + fmtTime(fut.start)}, ${esc(fut.title)}` : 'Nic więcej nie zaplanowano.'}</div></div>`;
   }
 
   // Oś dnia
   let tl = '';
-  if (allday.length) tl += `<div class="chips" style="padding:0 20px 12px">${allday.map((i) => `<button type="button" class="chip c" style="--c:${catOf(i.ev.cat).color}" data-act="open-ev" data-key="${i.key}">${esc(i.ev.title)}</button>`).join('')}</div>`;
+  if (allday.length) tl += `<div class="chips" style="padding:0 20px 12px">${allday.map((i) => `<button type="button" class="chip c" style="--c:${catOf(i.ev.cat).color}" data-act="open-ev" data-key="${i.key}">${esc(i.title)}</button>`).join('')}</div>`;
   if (timed.length) {
     let placed = false;
-    const nowLine = `<div class="tl-now"><span>teraz ${fmtTime(now)}</span></div>`;
+    const nowLine = `<div class="tl-now"><span>${fmtTime(now)}</span></div>`;
     tl += '<div class="tl">';
     const pastList = timed.filter((i) => i.end <= now);
     if (pastList.length) tl += `<div class="tl-row"><div class="tl-time"></div><button type="button" class="past-sum" data-act="toggle-past">${pastList.length} ${plural(pastList.length, 'zakończone wydarzenie', 'zakończone wydarzenia', 'zakończonych wydarzeń')}<span class="ico" style="transform:rotate(${nav.showPast ? 270 : 90}deg)">${ICON.chevR}</span></button></div>`;
@@ -217,6 +244,7 @@ export function renderToday() {
       </div>
     </div>
     <h1 class="date-hero"><span class="dnum">${now.getDate()}</span><span class="dtxt"><span class="dow">${DAYS_FULL[now.getDay()]}</span><span class="mon">${MONTHS_GEN[now.getMonth()]} ${now.getFullYear()}</span></span></h1>
+    <div class="hero-meta">${dayMeta(now, { week: true })}</div>
     <div class="daybar" aria-hidden="true">${segs}<span class="past" style="width:${nowPct}%"></span><span class="now" style="left:calc(${nowPct}% - 1px)"></span></div>
     <div class="daybar-lbl"><span>${lbl(ds)}</span><span>${lbl(Math.round((ds + de) / 2 / 30) * 30)}</span><span>${lbl(de)}</span></div>
   </header>
@@ -249,6 +277,10 @@ function calTitle() {
     const e = addDays(s, 6);
     return s.getMonth() === e.getMonth() ? `${s.getDate()}–${e.getDate()} ${MONTHS_SHORT[s.getMonth()]}<small>${e.getFullYear()}</small>` : `${s.getDate()} ${MONTHS_SHORT[s.getMonth()]} – ${e.getDate()} ${MONTHS_SHORT[e.getMonth()]}`;
   }
+  if (v === '3day') {
+    const e = addDays(c, 2);
+    return c.getMonth() === e.getMonth() ? `${c.getDate()}–${e.getDate()} ${MONTHS_SHORT[c.getMonth()]}<small>${e.getFullYear()}</small>` : `${c.getDate()} ${MONTHS_SHORT[c.getMonth()]} – ${e.getDate()} ${MONTHS_SHORT[e.getMonth()]}`;
+  }
   if (v === 'day') return `${c.getDate()} ${MONTHS_SHORT[c.getMonth()]}<small>${DAYS_FULL[c.getDay()]}</small>`;
   return 'Agenda';
 }
@@ -261,9 +293,9 @@ export function renderCal() {
         <button type="button" class="round" data-act="search" aria-label="Szukaj"><span class="ico">${ICON.search}</span></button>
         ${v === 'agenda' ? '' : `<button type="button" class="round" data-act="cal-prev" aria-label="Poprzedni"><span class="ico">${ICON.chevL}</span></button><button type="button" class="round" data-act="cal-next" aria-label="Następny"><span class="ico">${ICON.chevR}</span></button>`}
       </div></div>
-    <div class="cal-views"><div class="seg">${[['month', 'Miesiąc'], ['week', 'Tydzień'], ['day', 'Dzień'], ['agenda', 'Agenda']].map(([k, l]) => `<button type="button" class="${v === k ? 'on' : ''}" data-act="calview" data-v="${k}">${l}</button>`).join('')}</div>${v === 'agenda' ? '' : '<button type="button" class="btn small" data-act="cal-today">Dziś</button>'}</div>
+    <div class="cal-views"><div class="seg">${[['month', 'Miesiąc'], ['week', 'Tydzień'], ['3day', '3 dni'], ['day', 'Dzień'], ['agenda', 'Agenda']].map(([k, l]) => `<button type="button" class="${v === k ? 'on' : ''}" data-act="calview" data-v="${k}">${l}</button>`).join('')}</div>${v === 'agenda' ? '' : '<button type="button" class="btn small" data-act="cal-today">Dziś</button>'}</div>
   </header>`;
-  const body = v === 'month' ? renderMonth() : v === 'week' ? renderGrid(7) : v === 'day' ? renderGrid(1) : renderAgenda();
+  const body = v === 'month' ? renderMonth() : v === 'week' ? renderGrid(7) : v === '3day' ? renderGrid(3) : v === 'day' ? renderGrid(1) : renderAgenda();
   return head + body;
 }
 
@@ -284,7 +316,8 @@ function renderMonth() {
     const n = list.length;
     const cols = [...new Set(list.map((i) => catOf(i.ev.cat).color))].slice(0, 3);
     const heat = n >= 5 ? 3 : n >= 3 ? 2 : n >= 1 ? 1 : 0;
-    cells += `<button type="button" class="mcell ${d.getMonth() !== c.getMonth() ? 'out' : ''} ${sameDay(d, now) ? 'today' : ''} ${sameDay(d, nav.selected) ? 'sel' : ''} ${heat ? 'heat' + heat : ''}" data-act="pick-day" data-date="${ymd(d)}" aria-label="${fmtDayLong(d)}${n ? ', ' + n + ' wydarzeń' : ''}"><span class="n">${d.getDate()}</span><span class="dots">${cols.map((x) => `<i style="--c:${x}"></i>`).join('')}${n > 3 ? `<span class="more">+</span>` : ''}</span></button>`;
+    const hi = dayInfo(d);
+    cells += `<button type="button" class="mcell ${hi?.off ? 'hol' : ''} ${d.getMonth() !== c.getMonth() ? 'out' : ''} ${sameDay(d, now) ? 'today' : ''} ${sameDay(d, nav.selected) ? 'sel' : ''} ${heat ? 'heat' + heat : ''}" data-act="pick-day" data-date="${ymd(d)}" aria-label="${fmtDayLong(d)}${n ? ', ' + n + ' wydarzeń' : ''}"><span class="n">${d.getDate()}</span><span class="dots">${cols.map((x) => `<i style="--c:${x}"></i>`).join('')}${n > 3 ? `<span class="more">+</span>` : ''}</span></button>`;
   }
   const sel = nav.selected;
   const dayList = (by.get(ymd(sel)) || instancesInRange(state.events, startOfDay(sel), addDays(startOfDay(sel), 1)));
@@ -292,6 +325,7 @@ function renderMonth() {
   const rows = dayList.map((i) => `<div class="drow"><div class="tm">${i.allDay ? '' : fmtTime(i.start)}${i.allDay ? '' : `<small>${fmtTime(i.end)}</small>`}</div>${evRow(i, now)}</div>`).join('');
   return `<div class="month"><div class="mhead">${head}</div><div class="mgrid">${cells}</div></div>
   <div class="dayhead"><h2>${relDay(sel) === fmtDayMid(sel) ? capFirst(DAYS_FULL[sel.getDay()]) : relDay(sel)}<small style="margin-left:8px;font-weight:500">${sel.getDate()} ${MONTHS_GEN[sel.getMonth()]}</small></h2><button type="button" class="link" data-act="add-on" data-date="${ymd(sel)}">Dodaj</button></div>
+  <div class="dayinfo">${dayMeta(sel, { week: true })}</div>
   <div class="dlist">${rows || '<div class="empty" style="padding:14px 4px">Brak wydarzeń tego dnia.</div>'}</div>
   ${tasks.length ? `<div class="tasks" style="margin-top:8px">${tasks.map((t) => taskRow(t)).join('')}</div>` : ''}
   <div class="spacer"></div>`;
@@ -301,20 +335,26 @@ const HH = 58;
 function renderGrid(ncols) {
   const now = new Date();
   const ws = state.settings.weekStart;
-  const days = ncols === 7 ? Array.from({ length: 7 }, (_, k) => addDays(startOfWeek(nav.cursor, ws), k)) : [startOfDay(nav.cursor)];
+  const days = ncols === 7 ? Array.from({ length: 7 }, (_, k) => addDays(startOfWeek(nav.cursor, ws), k)) : ncols === 3 ? [0, 1, 2].map((k) => addDays(startOfDay(nav.cursor), k)) : [startOfDay(nav.cursor)];
   const from = days[0];
   const to = addDays(days[days.length - 1], 1);
   const insts = instancesInRange(state.events, from, to);
-  const tight = ncols === 7;
+  const tight = ncols > 1;
+  const narrow = ncols === 7;
 
-  const headDays = days.map((d) => `<button type="button" class="wk-d ${sameDay(d, now) ? 'today' : ''} ${sameDay(d, nav.selected) && tight ? 'sel' : ''}" data-act="goto-day" data-date="${ymd(d)}"><span class="l">${DAYS_SHORT[d.getDay()]}</span><span class="n">${d.getDate()}</span></button>`).join('');
-  const header = tight ? `<div class="wk-head"><div></div><div class="wk-days" style="grid-template-columns:repeat(7,1fr)">${headDays}</div></div>` : '';
+  const wxAll = cachedWeather();
+  const headDays = days.map((d) => {
+    const dw = dailyFor(wxAll, ymd(d));
+    const hi = dayInfo(d);
+    return `<button type="button" class="wk-d ${sameDay(d, now) ? 'today' : ''} ${sameDay(d, nav.selected) && tight ? 'sel' : ''} ${hi?.off ? 'hol' : ''}" data-act="goto-day" data-date="${ymd(d)}" ${hi ? `title="${esc(hi.name)}"` : ''}><span class="l">${DAYS_SHORT[d.getDay()]}</span><span class="n">${d.getDate()}</span>${dw ? `<span class="w ${dw.pop >= 50 ? 'wet' : ''}"><span class="ico">${wIcon(dw.code)}</span>${dw.hi}°</span>` : '<span class="w"></span>'}${hi ? '<i class="hd"></i>' : ''}</button>`;
+  }).join('');
+  const header = tight ? `<div class="wk-head"><div class="wk-no"><small>tydz.</small>${isoWeek(days[0])}</div><div class="wk-days" style="grid-template-columns:repeat(${ncols},1fr)">${headDays}</div></div>` : '';
 
   const alldayItems = insts.filter((i) => i.allDay || i.end - i.start >= 86400000);
   const adCells = days.map((d) => {
     const k = ymd(d);
     const list = alldayItems.filter((i) => spanDates(i).includes(k));
-    return `<div>${list.map((i) => `<button type="button" class="ad" style="--c:${catOf(i.ev.cat).color}" data-act="open-ev" data-key="${i.key}">${esc(i.ev.title)}</button>`).join('')}</div>`;
+    return `<div>${list.map((i) => `<button type="button" class="ad" style="--c:${catOf(i.ev.cat).color}" data-act="open-ev" data-key="${i.key}">${esc(i.title)}</button>`).join('')}</div>`;
   }).join('');
   const allday = alldayItems.length ? `<div class="allday-row"><div></div><div class="cells" style="grid-template-columns:repeat(${ncols},1fr)">${adCells}</div></div>` : '';
 
@@ -323,7 +363,7 @@ function renderGrid(ncols) {
   for (let h = 0; h <= 24; h++) {
     if (h > 0 && h < 24) hours += `<span style="top:${h * HH}px">${pad(h)}:00</span>`;
     lines += `<div class="hl" style="top:${h * HH}px"></div>`;
-    if (h < 24 && !tight) lines += `<div class="hl half" style="top:${h * HH + HH / 2}px"></div>`;
+    if (h < 24 && ncols < 7) lines += `<div class="hl half" style="top:${h * HH + HH / 2}px"></div>`;
   }
 
   const cols = days.map((d) => {
@@ -339,18 +379,20 @@ function renderGrid(ncols) {
       const height = Math.max(20, ((x.eMin - x.sMin) / 60) * HH - 1);
       const left = (x.col / x.cols) * 100;
       const width = 100 / x.cols;
-      const drag = !tight && sameDay(x.i.start, x.i.end) ? 'data-drag="1"' : '';
+      const drag = sameDay(x.i.start, x.i.end) ? 'data-drag="1"' : '';
       const tall = height > 44;
-      return `<button type="button" class="blk" style="--c:${c.color};top:${top}px;height:${height}px;left:calc(${left}% + 1px);width:calc(${width}% - 3px);${tight ? 'font-size:11px;padding:3px 3px 3px 6px' : ''}" data-act="open-ev" data-key="${x.i.key}" ${drag} data-s="${x.sMin}" data-e="${x.eMin}">
-        <b>${esc(x.i.ev.title)}</b>${tight ? '' : `<span class="tm">${fmtTime(x.i.start)}–${fmtTime(x.i.end)}</span>${tall && x.i.ev.loc ? `<span style="display:block">${esc(x.i.ev.loc)}</span>` : ''}`}${drag ? '<i class="rs"></i>' : ''}</button>`;
+      return `<button type="button" class="blk ${narrow ? 'nar' : ''}" style="--c:${c.color};top:${top}px;height:${height}px;left:calc(${left}% + 1px);width:calc(${width}% - 3px);${narrow ? 'font-size:11px;padding:3px 3px 3px 6px' : ''}" data-act="open-ev" data-key="${x.i.key}" ${drag} data-s="${x.sMin}" data-e="${x.eMin}">
+        <b>${esc(x.i.title)}</b>${narrow ? '' : `<span class="tm">${fmtTime(x.i.start)}–${fmtTime(x.i.end)}</span>${tall && x.i.ev.loc ? `<span style="display:block">${esc(x.i.ev.loc)}</span>` : ''}`}${drag ? '<i class="rs"></i>' : ''}</button>`;
     }).join('');
     const nowLine = sameDay(d, now) ? `<div class="nowline" style="top:${(minOf(now) / 60) * HH}px"></div>` : '';
     return `<div class="col" data-date="${k}" style="height:${24 * HH}px">${blocks}${nowLine}</div>`;
   }).join('');
 
-  const pageHead = tight ? '' : `<div class="dayhead" style="padding-top:10px"><h2>${relDay(days[0]) === fmtDayMid(days[0]) ? capFirst(DAYS_FULL[days[0].getDay()]) : relDay(days[0])}</h2><button type="button" class="link" data-act="add-on" data-date="${ymd(days[0])}">Dodaj</button></div>`;
+  const pageHead = tight ? '' : `<div class="dayhead" style="padding-top:10px"><h2>${relDay(days[0]) === fmtDayMid(days[0]) ? capFirst(DAYS_FULL[days[0].getDay()]) : relDay(days[0])}</h2><button type="button" class="link" data-act="add-on" data-date="${ymd(days[0])}">Dodaj</button></div><div class="dayinfo">${dayMeta(days[0], { week: true })}</div>`;
+  const trayTasks = !narrow ? state.tasks.filter((t) => !t.done && (!t.due || t.due <= ymd(days[days.length - 1]))).sort((a, b) => b.prio - a.prio || (a.due || '9').localeCompare(b.due || '9')).slice(0, 14) : [];
+  const tray = trayTasks.length ? `<div class="tray ${ncols === 3 ? 'three' : ''}"><div class="tray-l"><span class="tray-lbl" title="Przytrzymaj zadanie i upuść na osi czasu">Zablokuj czas:</span>${trayTasks.map((t) => `<span class="tk" style="--c:${catOf(t.cat).color}" data-task="${t.id}">${esc(t.title)}</span>`).join('')}</div></div>` : '';
   const dayTasks = !tight ? state.tasks.filter((t) => !t.done && t.due === ymd(days[0])) : [];
-  return `${header}${pageHead}${allday}
+  return `${header}${pageHead}${tray}${allday}
   <div class="tgrid" id="tgrid" style="--hh:${HH}px;height:${24 * HH}px"><div class="hours">${hours}</div><div class="cols" style="grid-template-columns:repeat(${ncols},1fr);height:${24 * HH}px"><div style="position:absolute;inset:0;pointer-events:none">${lines}</div>${cols}</div></div>
   ${dayTasks.length ? `<div class="sec"><div class="sec-h"><h2>Zadania</h2></div><div class="tasks">${dayTasks.map((t) => taskRow(t)).join('')}</div></div>` : ''}
   <div class="spacer"></div>`;
@@ -385,6 +427,7 @@ export function bindGridDrag(grid) {
   if (!grid) return;
   let st = null;
   const getY = (e) => (e.touches ? e.touches[0] : e).clientY;
+  const getX = (e) => (e.touches ? e.touches[0] : e).clientX;
   const SNAP = 5;
 
   const begin = (e) => {
@@ -394,12 +437,13 @@ export function bindGridDrag(grid) {
     const col = e.target.closest('.col');
     const touch = !!e.touches;
     if (rs && blk) st = { mode: 'resize', el: blk, y0: getY(e), active: true };
-    else if (blk) st = { mode: 'move', el: blk, y0: getY(e), active: false };
+    else if (blk) st = { mode: 'move', el: blk, y0: getY(e), x0: getX(e), active: false };
     else if (col && !e.target.closest('.blk')) st = { mode: 'create', el: col, y0: getY(e), active: false };
     else return;
     st.s0 = +(blk?.dataset.s ?? 0);
     st.e0 = +(blk?.dataset.e ?? 0);
     st.dy = 0;
+    st.dx = 0;
     st.inst = blk ? instOf(blk.dataset.key) : null;
     if (st.mode === 'resize') { blk.classList.add('drag'); dragState.active = true; haptic(); if (touch) e.stopPropagation(); }
     else {
@@ -432,6 +476,16 @@ export function bindGridDrag(grid) {
     if (st.mode === 'create') return;
     if (e.cancelable) e.preventDefault();
     st.dy = dy;
+    if (st.mode === 'move') {
+      const dx = getX(e) - st.x0;
+      st.dx = dx;
+      st.el.style.transform = `translateX(${dx}px)`;
+      st.el.style.zIndex = 20;
+      const cols = [...grid.querySelectorAll('.col')];
+      const hit = cols.find((c) => { const r = c.getBoundingClientRect(); return getX(e) >= r.left && getX(e) < r.right; });
+      cols.forEach((c) => c.classList.toggle('drop', c === hit && cols.length > 1));
+      st.target = hit?.dataset.date || null;
+    }
     const delta = Math.round(((dy / HH) * 60) / SNAP) * SNAP;
     const tm = st.el.querySelector('.tm');
     if (st.mode === 'move') {
@@ -457,19 +511,22 @@ export function bindGridDrag(grid) {
     if (!s.active || s.mode === 'create') return;
     dragState.endedAt = Date.now();
     s.el.classList.remove('drag');
+    s.el.style.transform = '';
+    grid.querySelectorAll('.col.drop').forEach((c) => c.classList.remove('drop'));
     const inst = s.inst;
     if (!inst) return rerender();
-    const day = startOfDay(inst.start);
+    const day = s.mode === 'move' && s.target ? parseYmd(s.target) : startOfDay(inst.start);
+    const sameD = ymd(day) === ymd(inst.start);
     let ns = s.mode === 'move' ? s.newS ?? s.s0 : s.s0;
     let ne = s.mode === 'move' ? ns + (s.e0 - s.s0) : s.newE ?? s.e0;
-    if (ns === s.s0 && ne === s.e0) return rerender();
+    if (ns === s.s0 && ne === s.e0 && sameD) return rerender();
     const start = addMinutes(day, ns);
     const endD = addMinutes(day, ne);
     const f = (d) => `${ymd(d)}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
     if (inst.recurring) detachOccurrence(inst, { start: f(start), end: f(endD) });
     else updateEvent(inst.ev.id, { start: f(start), end: f(endD) });
     haptic();
-    toast(inst.recurring ? 'Zmieniono tylko ten dzień' : `Przeniesiono: ${fmtTime(start)}–${fmtTime(endD)}`, { action: 'Cofnij', onAction: () => { undo(); rerender(); } });
+    toast(inst.recurring ? 'Zmieniono tylko ten dzień' : `Przeniesiono: ${sameD ? '' : fmtDayMid(day) + ', '}${fmtTime(start)}–${fmtTime(endD)}`, { action: 'Cofnij', onAction: () => { undo(); rerender(); } });
   };
 
   grid.addEventListener('touchstart', begin, { passive: true });
@@ -479,6 +536,178 @@ export function bindGridDrag(grid) {
   grid.addEventListener('mousedown', begin);
   window.addEventListener('mousemove', (e) => st && move(e));
   window.addEventListener('mouseup', end);
+}
+
+// Blokowanie czasu: przeciągnięcie zadania z paska nad siatką na oś czasu tworzy wydarzenie.
+export function bindTray(root) {
+  let st = null;
+  let raf = 0;
+  const pt = (e) => e.touches?.[0] || e.changedTouches?.[0] || e;
+  const colAt = (x, y) => { st.ghost.style.display = 'none'; const c = document.elementFromPoint(x, y)?.closest('.col'); st.ghost.style.display = ''; return c; };
+  const minAt = (col, y) => {
+    const r = col.getBoundingClientRect();
+    return Math.max(0, Math.min(1440 - 60, Math.round((((y - r.top) / HH) * 60) / 15) * 15));
+  };
+  const clearInd = () => root.querySelectorAll('.drop-ind').forEach((n) => n.remove());
+  const loop = () => {
+    if (!st?.active) return;
+    const y = st.y;
+    const vh = window.innerHeight;
+    const v = root;
+    if (y > vh - 150) v.scrollTop += Math.min(18, (y - (vh - 150)) / 4);
+    else if (y < 170) v.scrollTop -= Math.min(18, (170 - y) / 4);
+    raf = requestAnimationFrame(loop);
+  };
+  root.addEventListener('touchstart', (e) => {
+    const t = e.target.closest('.tray .tk');
+    if (!t) return;
+    const p = pt(e);
+    st = { t, x0: p.clientX, y0: p.clientY, x: p.clientX, y: p.clientY, active: false };
+    st.timer = setTimeout(() => {
+      if (!st) return;
+      st.active = true;
+      dragState.active = true;
+      haptic();
+      const g = document.createElement('div');
+      g.className = 'tk-ghost';
+      g.textContent = t.textContent;
+      g.style.cssText = `--c:${t.style.getPropertyValue('--c')}`;
+      document.body.appendChild(g);
+      st.ghost = g;
+      g.style.left = `${st.x}px`;
+      g.style.top = `${st.y}px`;
+      t.style.opacity = '.35';
+      raf = requestAnimationFrame(loop);
+    }, 320);
+  }, { passive: true });
+  root.addEventListener('touchmove', (e) => {
+    if (!st) return;
+    const p = pt(e);
+    st.x = p.clientX; st.y = p.clientY;
+    if (!st.active) {
+      if (Math.hypot(p.clientX - st.x0, p.clientY - st.y0) > 9) { clearTimeout(st.timer); st = null; }
+      return;
+    }
+    if (e.cancelable) e.preventDefault();
+    st.ghost.style.left = `${p.clientX}px`;
+    st.ghost.style.top = `${p.clientY}px`;
+    clearInd();
+    const col = colAt(p.clientX, p.clientY);
+    root.querySelectorAll('.col.drop').forEach((c) => c.classList.remove('drop'));
+    if (col) {
+      col.classList.add('drop');
+      const m = minAt(col, p.clientY);
+      const ind = document.createElement('div');
+      ind.className = 'drop-ind';
+      ind.style.top = `${(m / 60) * HH}px`;
+      ind.style.height = `${HH}px`;
+      ind.innerHTML = `<span>${pad(Math.floor(m / 60))}:${pad(m % 60)}</span>`;
+      col.appendChild(ind);
+    }
+  }, { passive: false });
+  const end = (e) => {
+    if (!st) return;
+    clearTimeout(st.timer);
+    cancelAnimationFrame(raf);
+    const s = st;
+    st = null;
+    dragState.active = false;
+    if (!s.active) return;
+    dragState.endedAt = Date.now();
+    const p = pt(e);
+    s.st = s;
+    const col = (() => { s.ghost.style.display = 'none'; const c = document.elementFromPoint(p.clientX, p.clientY)?.closest('.col'); return c; })();
+    s.ghost.remove();
+    s.t.style.opacity = '';
+    clearInd();
+    root.querySelectorAll('.col.drop').forEach((c) => c.classList.remove('drop'));
+    if (!col) return;
+    const task = state.tasks.find((x) => x.id === s.t.dataset.task);
+    if (!task) return;
+    const m = minAt(col, p.clientY);
+    const day = parseYmd(col.dataset.date);
+    const a = new Date(day.getFullYear(), day.getMonth(), day.getDate(), 0, m);
+    const b = addMinutes(a, task.est || 60);
+    const f = (d) => `${ymd(d)}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    batch(() => {
+      addEvent(newEvent({ title: task.title, cat: task.cat, start: f(a), end: f(b), fromTask: task.id }));
+      updateTask(task.id, { due: ymd(day), dueTime: fmtTime(a) });
+    });
+    haptic();
+    toast(`Zablokowano czas: ${fmtDayMid(day)}, ${fmtTime(a)}–${fmtTime(b)}`, { action: 'Cofnij', onAction: () => { undo(); rerender(); } });
+  };
+  root.addEventListener('touchend', end);
+  root.addEventListener('touchcancel', end);
+}
+
+// Przeniesienie wydarzenia na inny dzień z zachowaniem godzin (miesiąc: przytrzymaj wiersz i upuść na dniu).
+export function moveInstToDay(inst, day) {
+  const delta = diffDays(day, startOfDay(inst.start));
+  if (!delta) return false;
+  const f = (d) => `${ymd(d)}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  const start = addDays(inst.start, delta);
+  const end = addDays(inst.end, delta);
+  if (inst.recurring) detachOccurrence(inst, { start: f(start), end: f(end) });
+  else updateEvent(inst.ev.id, { start: f(start), end: f(end) });
+  haptic();
+  toast(`Przeniesiono na ${fmtDayMid(day)}`, { action: 'Cofnij', onAction: () => { undo(); rerender(); } });
+  return true;
+}
+
+export function bindMonthDrag(root) {
+  if (!root) return;
+  let st = null;
+  const pt = (e) => e.touches?.[0] || e.changedTouches?.[0] || e;
+  const cellAt = (x, y) => document.elementFromPoint(x, y)?.closest('.mcell');
+  root.addEventListener('touchstart', (e) => {
+    const b = e.target.closest('.dlist .ev');
+    if (!b) return;
+    const p = pt(e);
+    st = { b, x0: p.clientX, y0: p.clientY, active: false };
+    st.timer = setTimeout(() => {
+      if (!st) return;
+      st.active = true;
+      dragState.active = true;
+      haptic();
+      const r = b.getBoundingClientRect();
+      const g = b.cloneNode(true);
+      g.className = 'ev drag-ghost';
+      g.style.cssText = `position:fixed;left:${r.left}px;top:${r.top}px;width:${r.width}px;z-index:80;pointer-events:none;opacity:.92;transform:scale(.96);box-shadow:var(--shadow)`;
+      document.body.appendChild(g);
+      st.ghost = g;
+      b.style.opacity = '.35';
+    }, 380);
+  }, { passive: true });
+  root.addEventListener('touchmove', (e) => {
+    if (!st) return;
+    const p = pt(e);
+    if (!st.active) {
+      if (Math.hypot(p.clientX - st.x0, p.clientY - st.y0) > 9) { clearTimeout(st.timer); st = null; }
+      return;
+    }
+    if (e.cancelable) e.preventDefault();
+    st.ghost.style.transform = `translate(${p.clientX - st.x0}px, ${p.clientY - st.y0}px) scale(.96)`;
+    root.querySelectorAll('.mcell.drop').forEach((c) => c.classList.remove('drop'));
+    cellAt(p.clientX, p.clientY)?.classList.add('drop');
+  }, { passive: false });
+  const end = (e) => {
+    if (!st) return;
+    clearTimeout(st.timer);
+    const s = st;
+    st = null;
+    dragState.active = false;
+    if (!s.active) return;
+    dragState.endedAt = Date.now();
+    s.ghost?.remove();
+    s.b.style.opacity = '';
+    root.querySelectorAll('.mcell.drop').forEach((c) => c.classList.remove('drop'));
+    const p = pt(e);
+    const cell = cellAt(p.clientX, p.clientY);
+    const inst = instOf(s.b.dataset.key);
+    if (cell && inst) moveInstToDay(inst, parseYmd(cell.dataset.date));
+  };
+  root.addEventListener('touchend', end);
+  root.addEventListener('touchcancel', end);
 }
 
 // ---------- Zadania ----------
@@ -537,9 +766,17 @@ export function renderHub() {
 
   return `<header class="page-h"><h1>Centrum</h1><p>Automatyzacje, powiadomienia i wygląd</p></header>
   <div class="spacer"></div>
-  <div class="stat-card"><div class="big">${wk.length}<small>${plural(wk.length, 'wydarzenie', 'wydarzenia', 'wydarzeń')} w tym tygodniu</small></div>
+  <button type="button" class="stat-card" data-act="stats" style="display:block;width:calc(100% - 32px);text-align:left"><div class="big">${wk.length}<small>${plural(wk.length, 'wydarzenie', 'wydarzenia', 'wydarzeń')} w tym tygodniu</small></div>
     <div style="color:var(--text2);font-size:14px;margin-top:8px">${hoursTotal ? `${fmtDuration(hoursTotal * 60)} w kalendarzu. Najgęstszy dzień: ${DAYS_FULL[addDays(ws, busiest).getDay()]}.` : 'Ten tydzień jest jeszcze pusty.'}</div>
-    <div class="bars">${bars}</div></div>
+    <div class="bars">${bars}</div><div class="stat-more">Statystyki i porównanie tygodni ›</div></button>
+
+  <section class="sec"><div class="sec-h"><h2>Narzędzia</h2></div>
+    <div class="list">
+      <button type="button" class="row" data-act="find-slot"><span class="ico">${ICON.clock}</span><span class="rt"><b>Znajdź wolny termin</b><small>Pierwsze wolne okna między wydarzeniami</small></span></button>
+      <button type="button" class="row" data-act="stats"><span class="ico">${ICON.bolt}</span><span class="rt"><b>Statystyki</b><small>Czas wg kategorii i porównanie z poprzednim okresem</small></span></button>
+      <button type="button" class="row" data-act="lock-setup"><span class="ico">${ICON.lock || ICON.check}</span><span class="rt"><b>Blokada Face ID</b><small>${lockSummary()}</small></span><span class="val">${lockOn() ? 'Wł.' : 'Wył.'}</span></button>
+    </div>
+  </section>
 
   <section class="sec"><div class="sec-h"><h2>Automatyzacje</h2></div>
     <div class="list">
@@ -566,7 +803,8 @@ export function renderHub() {
   <section class="sec"><div class="sec-h"><h2>Wygląd</h2></div>
     <div class="list">
       <div class="row"><span class="rt"><b>Motyw</b></span><div class="seg">${[['auto', 'Auto'], ['dark', 'Ciemny'], ['light', 'Jasny']].map(([k, l]) => `<button type="button" class="${s.theme === k ? 'on' : ''}" data-act="set" data-k="theme" data-v="${k}">${l}</button>`).join('')}</div></div>
-      <div class="row"><span class="rt"><b>Kolor akcentu</b></span><div class="chips">${[['zorza', '#ff6a6a'], ['ocean', '#3aa0ff'], ['las', '#3fd08a'], ['fiolet', '#9a6bff']].map(([k, c]) => `<button type="button" class="chip ${s.accent === k ? 'on' : ''}" style="padding:0;width:34px;justify-content:center;background:${c}" data-act="set" data-k="accent" data-v="${k}" aria-label="Akcent ${k}">${s.accent === k ? `<span class="ico" style="color:#fff">${ICON.check}</span>` : ''}</button>`).join('')}</div></div>
+      <div class="row" style="flex-wrap:wrap"><span class="rt"><b>Tło</b></span><div class="skins" style="width:100%;margin-top:10px">${[['dusk', 'Zmierzch', '#131029'], ['midnight', 'Północ', '#000000'], ['ink', 'Atrament', '#0e1522'], ['wine', 'Wino', '#1d0d17'], ['forest', 'Las', '#0b1a15'], ['paper', 'Papier', '#f6f1e7']].map(([k, l, c]) => `<button type="button" class="skin ${(s.skin || 'dusk') === k ? 'on' : ''}" data-act="set" data-k="skin" data-v="${k}"><i style="--c:${c}"></i>${l}</button>`).join('')}</div>${(s.skin || 'dusk') === 'paper' ? '<small style="color:var(--text3);margin-top:8px;display:block;width:100%">Papier działa w jasnym motywie.</small>' : ''}</div>
+      <div class="row" style="flex-wrap:wrap"><span class="rt"><b>Kolor akcentu</b></span><div class="chips">${[['zorza', '#ff6a6a'], ['roza', '#ff6fb5'], ['zloto', '#ffbf3f'], ['las', '#3fd08a'], ['mieta', '#3ee0c8'], ['ocean', '#3aa0ff'], ['fiolet', '#9a6bff'], ['grafit', '#a9a9c4']].map(([k, c]) => `<button type="button" class="chip ${!s.accentCustom && s.accent === k ? 'on' : ''}" style="padding:0;width:34px;justify-content:center;background:${c}" data-act="set" data-k="accent" data-v="${k}" aria-label="Akcent ${k}">${!s.accentCustom && s.accent === k ? `<span class="ico" style="color:#fff">${ICON.check}</span>` : ''}</button>`).join('')}<label class="colorpick ${s.accentCustom ? 'on' : ''}" aria-label="Własny kolor"><input type="color" data-in="accentCustom" value="${s.accentCustom || '#ff6a6a'}"></label></div></div>
       <div class="row"><span class="rt"><b>Tydzień zaczyna się</b></span><div class="seg">${[[1, 'Pon'], [0, 'Ndz']].map(([k, l]) => `<button type="button" class="${s.weekStart === k ? 'on' : ''}" data-act="set" data-k="weekStart" data-v="${k}" data-num="1">${l}</button>`).join('')}</div></div>
       <div class="row"><span class="rt"><b>Pasek dnia</b><small>Zakres godzin na ekranie Dziś</small></span><input type="time" data-in="dayStart" value="${s.dayStart}" aria-label="Początek dnia"><input type="time" data-in="dayEnd" value="${s.dayEnd}" aria-label="Koniec dnia"></div>
       <button type="button" class="row" data-act="city"><span class="ico">${ICON.cloud}</span><span class="rt"><b>Pogoda</b><small>${esc(s.city.name)}</small></span><span class="val">Zmień</span></button>
@@ -579,6 +817,7 @@ export function renderHub() {
     <div class="list">
       <button type="button" class="row" data-act="export"><span class="ico">${ICON.download}</span><span class="rt"><b>Zapisz kopię zapasową</b><small>Plik JSON ze wszystkim, co masz w aplikacji</small></span></button>
       <button type="button" class="row" data-act="import"><span class="ico">${ICON.upload}</span><span class="rt"><b>Wczytaj kopię</b><small>Przywróć dane z pliku JSON</small></span></button>
+      <button type="button" class="row" data-act="import-ics"><span class="ico">${ICON.upload}</span><span class="rt"><b>Importuj plik .ics</b><small>Wydarzenia z innych kalendarzy (bez duplikatów)</small></span></button>
       <button type="button" class="row" data-act="export-ics"><span class="ico">${ICON.cal}</span><span class="rt"><b>Eksport do pliku .ics</b><small>Do innych kalendarzy</small></span></button>
       <button type="button" class="row" data-act="sample"><span class="ico">${ICON.sparkle}</span><span class="rt"><b>Wczytaj przykładowe dane</b><small>Żeby zobaczyć, jak to wygląda w akcji</small></span></button>
       <button type="button" class="row" data-act="wipe"><span class="ico" style="color:var(--danger)">${ICON.trash}</span><span class="rt"><b style="color:var(--danger)">Usuń wszystkie dane</b></span></button>

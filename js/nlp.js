@@ -48,6 +48,11 @@ function engine(text) {
     blank,
     get raw() { return raw; },
     get n() { return n; },
+    put(st, en, str) {
+      const rep = (x) => x.slice(0, st) + str + ' '.repeat(Math.max(0, en - st - str.length)) + x.slice(en);
+      raw = rep(raw);
+      n = rep(n);
+    },
     take(re) {
       const m = re.exec(n);
       if (!m) return null;
@@ -75,6 +80,34 @@ function engine(text) {
   };
 }
 
+const HOUR_WORDS = {
+  'dwudziestej czwartej': 0, 'dwudziestej trzeciej': 23, 'dwudziestej drugiej': 22, 'dwudziestej pierwszej': 21, 'dwudziesta czwarta': 0, 'dwudziesta trzecia': 23, 'dwudziesta druga': 22, 'dwudziesta pierwsza': 21,
+  pierwszej: 1, pierwsza: 1, drugiej: 2, druga: 2, trzeciej: 3, trzecia: 3, czwartej: 4, czwarta: 4, piatej: 5, piata: 5, szostej: 6, szosta: 6, siodmej: 7, siodma: 7, osmej: 8, osma: 8,
+  dziewiatej: 9, dziewiata: 9, dziesiatej: 10, dziesiata: 10, jedenastej: 11, jedenasta: 11, dwunastej: 12, dwunasta: 12, trzynastej: 13, trzynasta: 13, czternastej: 14, czternasta: 14,
+  pietnastej: 15, pietnasta: 15, szesnastej: 16, szesnasta: 16, siedemnastej: 17, siedemnasta: 17, osiemnastej: 18, osiemnasta: 18, dziewietnastej: 19, dziewietnasta: 19, dwudziestej: 20, dwudziesta: 20,
+};
+const MIN_WORDS = { 'czterdziesci piec': 45, trzydziesci: 30, pietnascie: 15, dziesiec: 10, dwadziescia: 20, czterdziesci: 40, piecdziesiat: 50, 'dwadziescia piec': 25, 'trzydziesci piec': 35 };
+const byLen = (o) => Object.keys(o).sort((a, b) => b.length - a.length).join('|');
+const HW = byLen(HOUR_WORDS);
+const MW = byLen(MIN_WORDS);
+const HW_A = new RegExp(`\\b(o|na|od|do|godz\\.?|okolo|ok\\.?)(\\s+)(${HW})(?:\\s+(${MW}))?(?![\\p{L}])`, 'u');
+const HW_B = new RegExp(`\\bw\\s?pol\\s+do\\s+(${HW})(?![\\p{L}])`, 'u');
+
+// „o piątej", „o szesnastej trzydzieści", „wpół do ósmej" -> „o 5:00" itd. (długość tekstu zostaje, więc indeksy się zgadzają)
+function wordTimes(E) {
+  const hhmm = (h, mi) => `${h}:${String(mi).padStart(2, '0')}`;
+  for (let guard = 0; guard < 4; guard++) {
+    let m = HW_B.exec(E.n);
+    if (m) { E.put(m.index, m.index + m[0].length, 'o ' + hhmm((HOUR_WORDS[m[1]] + 23) % 24, 30)); continue; }
+    m = HW_A.exec(E.n);
+    if (!m) return;
+    const st = m.index + m[1].length + m[2].length;
+    E.put(st, m.index + m[0].length, hhmm(HOUR_WORDS[m[3]], m[4] ? MIN_WORDS[m[4]] : 0));
+  }
+}
+
+const STORES = { biedronce: 'Biedronka', lidlu: 'Lidl', zabce: 'Żabka', kauflandzie: 'Kaufland', rossmannie: 'Rossmann', castoramie: 'Castorama', ikei: 'IKEA', carrefourze: 'Carrefour', decathlonie: 'Decathlon', orlenie: 'Orlen', stokrotce: 'Stokrotka', auchan: 'Auchan', netto: 'Netto', aldi: 'Aldi', dino: 'Dino', tesco: 'Tesco', warszawie: 'Warszawa', krakowie: 'Kraków', gdansku: 'Gdańsk', poznaniu: 'Poznań', wroclawiu: 'Wrocław', lodzi: 'Łódź', lublinie: 'Lublin', katowicach: 'Katowice', szczecinie: 'Szczecin', gdyni: 'Gdynia', sopocie: 'Sopot', bialymstoku: 'Białystok', bydgoszczy: 'Bydgoszcz', toruniu: 'Toruń', rzeszowie: 'Rzeszów', kielcach: 'Kielce', olsztynie: 'Olsztyn', opolu: 'Opole' };
+
 const startsWithMonth = (rest) => new RegExp(`^\\s*(?:${MONTHS})\\b`).test(rest);
 
 export function parse(text, opts = {}) {
@@ -93,6 +126,15 @@ export function parse(text, opts = {}) {
 
   // --- Rodzaj
   if (E.take(/^\s*(zadanie|todo|task)\b\s*[:\-–]?\s*/)) r.kind = 'task';
+
+  wordTimes(E);
+
+  // --- Urodziny: rok urodzenia wycinamy przed parsowaniem daty
+  if (/urodzin/.test(E.n)) {
+    r.bday = true;
+    const by = E.takeIf(/\b(19\d{2}|20[0-2]\d)\b/, () => true);
+    if (by) r.byear = +by[1];
+  }
 
   // --- Kategoria #tag
   const tag = E.takeRaw(/#([\p{L}\p{N}_]+)/u);
@@ -301,7 +343,21 @@ export function parse(text, opts = {}) {
     if (date && time == null) r.allDay = true;
   }
 
-  // --- Miejsce w tytule: „w Warszawie" zostaje w tytule; nic nie zgadujemy.
+  // --- Miejsce: „w Biedronce", „u Ani" nie, ale znane sklepy i miasta oraz wielka litera po „w/we/przy/obok"
+  if (!r.loc) {
+    const rest = E.raw.replace(/\s+/g, ' ').trim();
+    let pm = new RegExp(`\\b(?:w|we|przy|obok)\\s+(${Object.keys(STORES).join('|')}|leroy merlin)\\b`).exec(E.n);
+    if (pm) {
+      r.loc = STORES[pm[1]] || 'Leroy Merlin';
+      E.blank(pm.index, pm.index + pm[0].length);
+    } else if ((pm = /(?:^|\s)(?:w|we|przy|obok)\s+([A-ZĄĆĘŁŃÓŚŹŻ][\p{L}-]+(?:\s+[A-ZĄĆĘŁŃÓŚŹŻ][\p{L}-]+)?)/u.exec(E.raw)) && rest.replace(pm[0].trim(), '').replace(/[^\p{L}]/gu, '').length >= 3) {
+      const w = pm[1];
+      r.loc = STORES[norm(w)] || w;
+      const at = pm.index + (pm[0].length - pm[0].trimStart().length);
+      E.blank(at, pm.index + pm[0].length);
+    }
+  }
+
 
   // --- Tytuł
   let title = E.raw.replace(/\s+/g, ' ').trim();
@@ -321,6 +377,15 @@ export function parse(text, opts = {}) {
     for (const [id, re] of CAT_KEYWORDS) {
       if (re.test(nt) && cats.some((c) => c.id === id)) { r.cat = id; r.catInferred = true; break; }
     }
+  }
+
+  // --- Urodziny
+  if (r.bday && r.kind === 'event') {
+    if (!r.rrule) r.rrule = { freq: 'yearly', interval: 1 };
+    if (!r.cat) r.cat = 'rodzina';
+    if (r.remind == null) r.remind = [0, 1440];
+    if (date && !r.allDay && time == null) r.allDay = true;
+    r.allDay = true;
   }
 
   // --- Wyniki
@@ -344,7 +409,7 @@ export function parse(text, opts = {}) {
 export function toEventFields(p, now = new Date()) {
   const today = startOfDay(now);
   let date = p.date ? new Date(p.date + 'T00:00') : today;
-  if (p.allDay) return { title: p.title, allDay: true, start: `${ymd(date)}T00:00`, end: `${ymd(date)}T23:59`, rrule: p.rrule, cat: p.cat, loc: p.loc, remind: p.remind };
+  if (p.allDay) return { title: p.title, allDay: true, start: `${ymd(date)}T00:00`, end: `${ymd(date)}T23:59`, rrule: p.rrule, cat: p.cat, loc: p.loc, remind: p.remind, bday: !!p.bday, byear: p.byear || null };
   let hh, mm;
   if (p.time) [hh, mm] = p.time.split(':').map(Number);
   else {
@@ -356,5 +421,48 @@ export function toEventFields(p, now = new Date()) {
   const s = new Date(date.getFullYear(), date.getMonth(), date.getDate(), hh, mm);
   const e = new Date(s.getTime() + (p.durMin || 60) * 60000);
   const f = (d) => `${ymd(d)}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-  return { title: p.title, allDay: false, start: f(s), end: f(e), rrule: p.rrule, cat: p.cat, loc: p.loc, remind: p.remind };
+  return { title: p.title, allDay: false, start: f(s), end: f(e), rrule: p.rrule, cat: p.cat, loc: p.loc, remind: p.remind, bday: !!p.bday, byear: p.byear || null };
+}
+
+// ---------- Kilka wydarzeń w jednym zdaniu ----------
+const TIME_CUE = /\b(jutro|pojutrze|dzis|dzisiaj|o\s+\d|na\s+\d|\d{1,2}[:.]\d{2}|\d{1,2}\s*-\s*\d{1,2}|(?:w|we)\s+(?:poniedzialk|wtork|wtorek|sro|czwart|piat|sobot|niedziel)|za\s+(?:\d+|pol|godzine|chwile)|rano|wieczorem|przed poludniem)/;
+const DATE_CUE = /\b(jutro|pojutrze|dzis|dzisiaj|wczoraj|poniedzialk|wtork|wtorek|srod[aey]?|czwartk|czwartek|piatek|piatk|sobot|niedziel|\d{1,2}[./]\d{1,2}|codziennie|co\s|za\s+\d+\s+(?:dni|dzien|tyg)|weekend|przyszl|nastepn)/;
+
+export function splitSentences(text) {
+  const out = [];
+  const hard = (text || '').split(/\s*(?:;|\n)\s*/).filter((x) => x.trim());
+  for (const chunk of hard) {
+    // rozdzielamy tylko tam, gdzie z obu stron jest wskazówka czasu
+    const re = /\s+(?:a\s+potem|i\s+potem|a\s+nast[eę]pnie|potem|oraz|i)\s+/giu;
+    let last = 0;
+    let m;
+    const cuts = [];
+    while ((m = re.exec(chunk))) cuts.push([m.index, m.index + m[0].length]);
+    let start = 0;
+    for (const [a, b] of cuts) {
+      const left = chunk.slice(start, a);
+      const right = chunk.slice(b);
+      if (TIME_CUE.test(norm(left)) && TIME_CUE.test(norm(right))) { out.push(left.trim()); start = b; }
+    }
+    out.push(chunk.slice(start).trim());
+    void last;
+  }
+  return out.filter(Boolean);
+}
+
+export function parseMulti(text, opts = {}) {
+  const parts = splitSentences(text);
+  if (parts.length < 2) return [parse(text, opts)];
+  const res = [];
+  let prev = null;
+  for (const part of parts) {
+    const p = parse(part, opts);
+    if (prev && p.kind === 'event' && prev.date && !p.rrule && !DATE_CUE.test(norm(part)) && !p.relative) {
+      p.date = prev.date;
+      if (p.time) p.allDay = false;
+    }
+    res.push(p);
+    prev = p.date ? p : prev;
+  }
+  return res;
 }

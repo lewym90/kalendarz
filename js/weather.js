@@ -23,11 +23,11 @@ export function cachedWeather() {
 }
 
 export async function loadWeather(city, force = false) {
-  const key = `${city.lat},${city.lon}`;
+  const key = `v2:${city.lat},${city.lon}`;
   const c = cachedWeather();
   if (!force && c && c.key === key && Date.now() - c.t < 30 * 60000) return c;
   try {
-    const url = `https://api.open-meteo.com/v1/forecast?latitude=${city.lat}&longitude=${city.lon}&current=temperature_2m,apparent_temperature,weather_code,is_day&hourly=temperature_2m,precipitation_probability,weather_code&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max&timezone=auto&forecast_days=3`;
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${city.lat}&longitude=${city.lon}&current=temperature_2m,apparent_temperature,weather_code,is_day&hourly=temperature_2m,precipitation_probability,weather_code&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max&timezone=auto&forecast_days=7`;
     const res = await fetch(url);
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const j = await res.json();
@@ -41,6 +41,7 @@ export async function loadWeather(city, force = false) {
       hi: Math.round(j.daily.temperature_2m_max[0]),
       lo: Math.round(j.daily.temperature_2m_min[0]),
       pop: j.daily.precipitation_probability_max[0],
+      daily: j.daily.time.map((t, i) => ({ d: t, code: j.daily.weather_code[i], hi: Math.round(j.daily.temperature_2m_max[i]), lo: Math.round(j.daily.temperature_2m_min[i]), pop: j.daily.precipitation_probability_max[i] })),
       hourly: j.hourly.time.map((t, i) => ({ t, temp: j.hourly.temperature_2m[i], pop: j.hourly.precipitation_probability[i], code: j.hourly.weather_code[i] })),
     };
     try { localStorage.setItem(CK, JSON.stringify(out)); } catch (_) { /* pełny magazyn */ }
@@ -68,3 +69,14 @@ export function rainInsight(w, now = new Date()) {
   void day;
   return `Możliwy deszcz około ${wet.t.slice(11, 16)} (${wet.pop}%). Weź parasol.`;
 }
+
+export const dailyFor = (w, dateStr) => w?.daily?.find((x) => x.d === dateStr) || null;
+
+// Prognoza na godzinę wydarzenia, np. { temp, pop, code } albo null (poza zakresem 7 dni).
+export function hourlyFor(w, dateStr, hour) {
+  const t = `${dateStr}T${String(hour).padStart(2, '0')}:00`;
+  return w?.hourly?.find((h) => h.t === t) || null;
+}
+
+const OUTDOOR = /(bieg|biegan|spacer|rower|rowerem|piknik|grill|ognisk|mecz|trening na|boisk|park|ogród|ogrod|działk|dzialk|wycieczk|szlak|góry|gory|plaż|plaz|kajak|żagl|zagl|jezior|zoo|festiwal|koncert plener|rynek|rajd|nordic|golf|tenis|piłk|pilk)/i;
+export const isOutdoor = (ev) => !!ev && (ev.outdoor === true || (ev.outdoor !== false && (OUTDOOR.test(`${ev.title || ''} ${ev.loc || ''}`) || ev.cat === 'sport')));

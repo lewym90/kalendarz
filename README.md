@@ -15,6 +15,16 @@ Osobiste centrum dowodzenia: kalendarz, zadania i automatyzacje w jednej aplikac
 - Wydarzenia cykliczne, kategorie, zadania z przenoszeniem zaległych na dziś
 - Reguły: „jeśli kategoria Praca, przypomnij 30 minut wcześniej"
 - Poranny brief, podgląd jutra, przegląd tygodnia, licznik na ikonie, pogoda
-- Praca offline, kopia zapasowa JSON, eksport .ics
+- Widok 3 dni, przeciąganie wydarzeń między dniami (tydzień, 3 dni, miesiąc), edycja „ten i kolejne"
+- Blokowanie czasu: przytrzymaj zadanie i upuść na osi czasu
+- Znajdź wolny termin, statystyki z porównaniem okresów, import i eksport .ics
+- Polskie święta (także ruchome), imieniny, numery tygodni, wschód i zachód słońca, urodziny z wiekiem
+- Pogoda 7 dni w widokach i przy wydarzeniach plenerowych
+- Motywy tła, własny kolor akcentu, blokada Face ID (WebAuthn) z awaryjnym PIN-em
+- Praca offline, kopia zapasowa JSON
 
 Dane zapisują się lokalnie w telefonie. Bez zależności i bez budowania: czyste HTML, CSS i JavaScript.
+
+
+## Testy
+`npm test` (Node 22, bez zależności): parser zdań, powtarzanie, święta, import .ics, wolne terminy, podział serii.

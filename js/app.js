@@ -6,9 +6,11 @@ import {
 import { parse } from './nlp.js';
 import { instancesInRange } from './recur.js';
 import { nav, saveNav, setRender, rerender, toast, showBanner, confirmSheet, closeTopSheet, sheetOpen } from './ui.js';
-import { renderToday, renderCal, renderTasks, renderHub, paintWeather, bindGridDrag, dragState, instOf, skyPhase } from './screens.js';
+import { renderToday, renderCal, renderTasks, renderHub, paintWeather, bindGridDrag, bindMonthDrag, bindTray, dragState, instOf, skyPhase } from './screens.js';
 import { openQuickAdd, openEventEditor, openTaskEditor, openRuleEditor, openCatEditor, openSearch, openCitySheet, defaultDraftFor } from './editors.js';
 import { tick, snooze, updateBadge, enableNotifications, testNotification, setHandlers, briefFor } from './notify.js';
+import { initLock, openLockSettings } from './lock.js';
+import { openFindSlot, openStats, importICS } from './tools.js';
 import { loadWeather, cachedWeather, rainInsight, weatherKind } from './weather.js';
 
 const view = $('#view');
@@ -21,7 +23,10 @@ function applyTheme() {
   const dark = t === 'auto' ? matchMedia('(prefers-color-scheme: dark)').matches : t === 'dark';
   document.documentElement.dataset.theme = dark ? 'dark' : 'light';
   document.documentElement.dataset.accent = state.settings.accent;
-  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', dark ? '#131029' : '#f1eff9');
+  document.documentElement.dataset.skin = state.settings.skin || 'dusk';
+  const st = document.documentElement.style;
+  if (state.settings.accentCustom) { st.setProperty('--a1', state.settings.accentCustom); st.setProperty('--a2', 'color-mix(in oklab, ' + state.settings.accentCustom + ' 70%, #7a4dff)'); } else { st.removeProperty('--a1'); st.removeProperty('--a2'); }
+  requestAnimationFrame(() => document.querySelector('meta[name="theme-color"]')?.setAttribute('content', getComputedStyle(document.documentElement).getPropertyValue('--bg').trim() || (dark ? '#131029' : '#f1eff9')));
 }
 matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', applyTheme);
 
@@ -36,11 +41,17 @@ function renderDock() {
 // ---------- Renderowanie ----------
 let lastKey = '';
 let needScroll = true;
+let nextAnim = '';
+let animT = 0;
 
 function render() {
   const key = nav.tab + (nav.tab === 'cal' ? ':' + nav.calView : '');
   const scroll = view.scrollTop;
   const html = nav.tab === 'today' ? renderToday() : nav.tab === 'cal' ? renderCal() : nav.tab === 'tasks' ? renderTasks() : renderHub();
+  const anim = key !== lastKey ? 'tab' : nextAnim;
+  nextAnim = '';
+  clearTimeout(animT);
+  if (anim) { view.dataset.anim = anim; animT = setTimeout(() => { delete view.dataset.anim; }, 650); } else delete view.dataset.anim;
   view.innerHTML = html;
   view.dataset.tab = nav.tab;
   const same = key === lastKey && !needScroll;
@@ -56,13 +67,13 @@ function render() {
     if (head) view.style.setProperty('--head-h', head.offsetHeight + 'px');
     const grid = $('#tgrid');
     if (grid) {
-      if (nav.calView === 'day') bindGridDrag(grid);
+      bindGridDrag(grid);
       if (needScroll) {
         const HH = 58;
         const now = new Date();
-        const showNow = nav.calView === 'day' ? sameDay(nav.cursor, now) : nav.calView === 'week' && sameDay(startOfWeek(nav.cursor, state.settings.weekStart), startOfWeek(now, state.settings.weekStart));
+        const showNow = nav.calView === 'day' || nav.calView === '3day' ? sameDay(nav.cursor, now) : nav.calView === 'week' && sameDay(startOfWeek(nav.cursor, state.settings.weekStart), startOfWeek(now, state.settings.weekStart));
         const targetMin = showNow ? Math.max(0, now.getHours() * 60 - 90) : 7 * 60;
-        view.scrollTop = Math.max(0, grid.offsetTop + (targetMin / 60) * HH - (head?.offsetHeight || 0) - (nav.calView === 'week' ? 54 : 0));
+        view.scrollTop = Math.max(0, grid.offsetTop + (targetMin / 60) * HH - (head?.offsetHeight || 0) - (nav.calView === 'week' || nav.calView === '3day' ? 54 : 0));
       }
     }
   }
@@ -121,6 +132,7 @@ function gotoDay(date) {
 }
 
 function shiftCal(dir) {
+  nextAnim = dir > 0 ? 'next' : 'prev';
   const c = nav.cursor;
   if (nav.calView === 'month') {
     nav.cursor = new Date(c.getFullYear(), c.getMonth() + dir, 1);
@@ -129,11 +141,14 @@ function shiftCal(dir) {
   } else if (nav.calView === 'week') {
     nav.cursor = addDays(c, dir * 7);
     nav.selected = nav.cursor;
+  } else if (nav.calView === '3day') {
+    nav.cursor = addDays(c, dir * 3);
+    nav.selected = nav.cursor;
   } else {
     nav.cursor = addDays(c, dir);
     nav.selected = nav.cursor;
   }
-  needScroll = nav.calView !== 'month' ? !!(nav.calView === 'day' || nav.calView === 'week') : false;
+  needScroll = nav.calView !== 'month' ? nav.calView !== 'agenda' : false;
   render();
 }
 
@@ -190,6 +205,7 @@ const actions = {
   set(el) {
     const v = el.dataset.num ? Number(el.dataset.v) : el.dataset.v;
     state.settings[el.dataset.k] = v;
+    if (el.dataset.k === 'accent') state.settings.accentCustom = '';
     applyTheme();
     save();
   },
@@ -204,7 +220,11 @@ const actions = {
   'test-notif'() { testNotification(); toast('Wysłano testowe powiadomienie'); },
   export() { download(`kalendarz-kopia-${ymd(new Date())}.json`, exportData(), 'application/json'); },
   'export-ics'() { download(`kalendarz-${ymd(new Date())}.ics`, icsExport(), 'text/calendar'); },
-  import() { $('#file-in').click(); },
+  import() { const f = $('#file-in'); f.accept = 'application/json,.json'; f.click(); },
+  'import-ics'() { const f = $('#file-in'); f.accept = '.ics,text/calendar'; f.click(); },
+  stats() { openStats(); },
+  'lock-setup'() { openLockSettings(); },
+  'find-slot'() { openFindSlot(); },
   async wipe() {
     const ans = await confirmSheet({ title: 'Usunąć wszystkie dane?', text: 'Wydarzenia, zadania, reguły i ustawienia znikną z tego telefonu. Najpierw zrób kopię zapasową.', confirmLabel: 'Usuń wszystko' });
     if (ans === 'yes') { wipeAll(); toast('Dane usunięte'); }
@@ -238,7 +258,12 @@ document.addEventListener('change', (e) => {
     const f = t.files?.[0];
     if (!f) return;
     f.text().then((txt) => {
-      try { importData(txt); toast('Kopia wczytana'); } catch (err) { toast(err.message || 'Nie udało się wczytać pliku'); }
+      try {
+        if (/\.ics$/i.test(f.name) || /^\s*BEGIN:VCALENDAR/i.test(txt)) {
+          const r = importICS(txt);
+          toast(`Zaimportowano ${r.added} ${r.added === 1 ? 'wydarzenie' : 'wydarzeń'}${r.skipped ? `, pominięto ${r.skipped} już istniejących` : ''}`, { action: 'Cofnij', onAction: () => { undo(); rerender(); }, ms: 6000 });
+        } else { importData(txt); toast('Kopia wczytana'); }
+      } catch (err) { toast(err.message || 'Nie udało się wczytać pliku'); }
       t.value = '';
     });
     return;
@@ -249,6 +274,7 @@ document.addEventListener('change', (e) => {
   if (t.dataset.arr) v = JSON.parse(v);
   else if (t.dataset.num) v = Number(v);
   setPath(state.settings, path, v);
+  applyTheme();
   save();
 });
 
@@ -274,7 +300,7 @@ document.addEventListener('keydown', (e) => {
   let x0 = null;
   let y0 = null;
   view.addEventListener('touchstart', (e) => {
-    if (nav.tab !== 'cal' || nav.calView === 'agenda' || e.target.closest('.blk, .rs')) { x0 = null; return; }
+    if (nav.tab !== 'cal' || nav.calView === 'agenda' || e.target.closest('.blk, .rs, .tray')) { x0 = null; return; }
     x0 = e.touches[0].clientX; y0 = e.touches[0].clientY;
   }, { passive: true });
   view.addEventListener('touchend', (e) => {
@@ -322,7 +348,7 @@ function softRefresh() {
   if (document.visibilityState !== 'visible' || sheetOpen() || dragState.active) return;
   if (document.activeElement && /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName)) return;
   if (Date.now() - lastPaint < 25000) return;
-  if (nav.tab === 'today' || (nav.tab === 'cal' && (nav.calView === 'day' || nav.calView === 'week'))) { lastPaint = Date.now(); render(); }
+  if (nav.tab === 'today' || (nav.tab === 'cal' && (nav.calView === 'day' || nav.calView === 'week' || nav.calView === '3day'))) { lastPaint = Date.now(); render(); }
 }
 
 document.addEventListener('visibilitychange', () => {
@@ -336,8 +362,12 @@ document.addEventListener('visibilitychange', () => {
 
 onChange(() => { lastPaint = Date.now(); render(); updateBadge(); });
 
+bindMonthDrag(view);
+bindTray(view);
+
 // ---------- Start ----------
 applyTheme();
+initLock();
 rolloverTasks();
 render();
 updateBadge();

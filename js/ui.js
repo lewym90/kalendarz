@@ -157,7 +157,7 @@ export function showBanner(a, { onOpen, onSnooze } = {}) {
   bannerTimer = setTimeout(hide, a.kind === 'event' ? 20000 : 9000);
 }
 
-export function confirmSheet({ title, text, confirmLabel = 'Usuń', danger = true, extra }) {
+export function confirmSheet({ title, text, confirmLabel = 'Usuń', danger = true, extra, extras = [] }) {
   return new Promise((resolve) => {
     let answered = false;
     const h = openSheet(`
@@ -166,6 +166,7 @@ export function confirmSheet({ title, text, confirmLabel = 'Usuń', danger = tru
       <div class="sheet-b"><p style="color:var(--text2)">${esc(text || '')}</p></div>
       <div class="sheet-f" style="flex-direction:column">
         ${extra ? `<button class="btn block" data-c="extra" type="button">${esc(extra)}</button>` : ''}
+        ${extras.map((x) => `<button class="btn block" data-c="x:${esc(x.id)}" type="button">${esc(x.label)}</button>`).join('')}
         <button class="btn block ${danger ? 'danger' : 'primary'}" data-c="yes" type="button">${esc(confirmLabel)}</button>
         <button class="btn block" data-c="no" type="button">Anuluj</button>
       </div>`, { onClose: () => { if (!answered) resolve(null); } });
@@ -173,7 +174,7 @@ export function confirmSheet({ title, text, confirmLabel = 'Usuń', danger = tru
       const c = e.target.closest('[data-c]')?.dataset.c;
       if (!c) return;
       answered = true;
-      resolve(c === 'yes' ? 'yes' : c === 'extra' ? 'extra' : null);
+      resolve(c === 'yes' ? 'yes' : c === 'extra' ? 'extra' : c.startsWith('x:') ? c.slice(2) : null);
       closeSheet(h);
     });
   });

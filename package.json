@@ -1,0 +1,6 @@
+{
+  "name": "kalendarz",
+  "private": true,
+  "type": "module",
+  "scripts": { "test": "node --import ./tests/setup.mjs --test tests/*.test.mjs" }
+}

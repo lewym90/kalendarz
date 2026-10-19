@@ -63,7 +63,9 @@ export function instancesInRange(events, from, to) {
 
 function make(ev, start, end, recurring) {
   const date = ymd(start);
-  return { ev, id: ev.id, date, start, end, allDay: !!ev.allDay, recurring, key: `${ev.id}@${date}` };
+  const age = ev.bday && ev.byear ? +date.slice(0, 4) - ev.byear : null;
+  const title = age != null && age > 0 ? `${ev.title} (${age})` : ev.title;
+  return { ev, id: ev.id, date, start, end, allDay: !!ev.allDay, recurring, title, key: `${ev.id}@${date}` };
 }
 
 export function instancesOnDay(events, day) {

@@ -3,9 +3,9 @@ import {
   $, $$, esc, ymd, parseYmd, parseDT, fmtDT, fmtTime, pad, addDays, addMinutes, startOfDay, relDay, fmtDayLong, fmtDayMid, fmtDuration, fmtReminder, ICON, haptic, uid, debounce, DAYS_LETTER, MONTHS_GEN, DAYS_SHORT,
 } from './util.js';
 import {
-  state, save, catOf, newEvent, addEvent, updateEvent, deleteEvent, deleteOccurrence, detachOccurrence, newTask, addTask, updateTask, deleteTask, undo, topHistory, effectiveReminders, applyCreationRules, describeRule as describeRuleDef, CAT_PALETTE,
+  state, save, catOf, newEvent, addEvent, updateEvent, deleteEvent, deleteOccurrence, detachOccurrence, splitSeries, deleteFollowing, batch, newTask, addTask, updateTask, deleteTask, undo, topHistory, effectiveReminders, applyCreationRules, describeRule as describeRuleDef, CAT_PALETTE,
 } from './store.js';
-import { parse, toEventFields, norm } from './nlp.js';
+import { parse, parseMulti, toEventFields, norm } from './nlp.js';
 import { instancesInRange, describeRule, eventSpan } from './recur.js';
 import { openSheet, closeSheet, toast, rerender, confirmSheet, nav } from './ui.js';
 import { searchCity } from './weather.js';
@@ -35,6 +35,7 @@ const examples = [
 export function openQuickAdd({ text = '', mode = 'event', ctxDate = null } = {}) {
   let kind = mode;
   let parsed = null;
+  let parsedAll = [];
   let exIdx = Math.floor(Math.random() * examples.length);
   const hist = topHistory(7);
   const defaults = ['Lunch', 'Trening', 'Spotkanie', 'Zakupy'];
@@ -62,7 +63,18 @@ export function openQuickAdd({ text = '', mode = 'event', ctxDate = null } = {})
   const addBtn = $('#qa-add', el);
 
   const run = () => {
-    const p = parse(input.value, { now: new Date(), cats: state.cats, mode: kind, history: state.history });
+    const all = parseMulti(input.value, { now: new Date(), cats: state.cats, mode: kind, history: state.history });
+    const p = all[0];
+    for (const q of all) fixCtx(q);
+    parsedAll = all;
+    if (p.kind === 'task' && kind !== 'task') { kind = 'task'; syncSeg(); }
+    parsed = p;
+    addBtn.disabled = !all.some((x) => x.title);
+    addBtn.textContent = all.length > 1 ? `Dodaj ${all.length}` : 'Dodaj';
+    renderPreview(p);
+  };
+
+  const fixCtx = (p) => {
     if (ctxDate && !p.date && !p.rrule) {
       p.date = ymd(ctxDate);
       if (p.kind === 'event' && !p.time) {
@@ -72,17 +84,13 @@ export function openQuickAdd({ text = '', mode = 'event', ctxDate = null } = {})
         p.allDay = false;
       }
     }
-    if (p.kind === 'task' && kind !== 'task') { kind = 'task'; syncSeg(); }
-    parsed = p;
-    addBtn.disabled = !p.title;
-    renderPreview(p);
   };
 
   const syncSeg = () => $$('.seg button', el).forEach((b) => b.classList.toggle('on', b.dataset.k === kind));
 
   const buildFields = (p) => {
     const f = toEventFields(p);
-    const ev = newEvent({ title: f.title, start: f.start, end: f.end, allDay: f.allDay, cat: p.cat || 'inne', loc: f.loc, rrule: f.rrule, reminders: p.remind ?? (f.allDay ? [0] : [...state.settings.defaultRemind]) });
+    const ev = newEvent({ title: f.title, start: f.start, end: f.end, allDay: f.allDay, cat: p.cat || 'inne', loc: f.loc, rrule: f.rrule, reminders: p.remind ?? (f.allDay ? [0] : [...state.settings.defaultRemind]), bday: !!f.bday, byear: f.byear || null });
     return ev;
   };
 
@@ -91,6 +99,14 @@ export function openQuickAdd({ text = '', mode = 'event', ctxDate = null } = {})
       prev.innerHTML = `<div class="hint">Wpisz jedno zdanie, a resztę zrobię sam. Na przykład:
         <div class="chips" style="margin-top:10px">${examples.slice(0, 3).map((x) => `<button type="button" class="chip" data-ex="${esc(x)}">${esc(x)}</button>`).join('')}</div>
         <div style="margin-top:10px">Dodatki: <b>@miejsce</b>, <b>#kategoria</b>, <b>przypomnij 30 min wcześniej</b>.</div></div>`;
+      return;
+    }
+    if (parsedAll.length > 1) {
+      prev.innerHTML = `<div class="pt">${parsedAll.length} pozycje w jednym zdaniu</div>` + parsedAll.map((q) => {
+        const when = q.kind === 'task' ? (q.date ? relDay(parseYmd(q.date)) : 'bez terminu') : (() => { const e2 = buildFields(q); const s2 = parseDT(e2.start); return `${relDay(s2)}${e2.allDay ? ', cały dzień' : ', ' + fmtTime(s2)}`; })();
+        const c2 = catOf(q.cat || 'inne');
+        return `<div class="chips" style="margin:6px 0"><span class="chip c pop" style="--c:${c2.color}">${esc(c2.name)}</span><span class="chip pop"><b style="font-weight:700">${esc(q.title || '…')}</b></span><span class="chip pop"><span class="ico">${ICON.cal}</span>${esc(when)}</span>${q.loc ? `<span class="chip pop"><span class="ico">${ICON.pin}</span>${esc(q.loc)}</span>` : ''}</div>`;
+      }).join('');
       return;
     }
     const chips = [];
@@ -105,6 +121,7 @@ export function openQuickAdd({ text = '', mode = 'event', ctxDate = null } = {})
       if (!ev.allDay && !p.durDefault) chips.push(`<span class="chip pop"><span class="ico">${ICON.clock}</span>${fmtDuration((e - s) / 60000)}</span>`);
       if (ev.rrule) chips.push(`<span class="chip pop"><span class="ico">${ICON.repeat}</span>${esc(describeRule(ev.rrule, s))}</span>`);
       if (ev.loc) chips.push(`<span class="chip pop"><span class="ico">${ICON.pin}</span>${esc(ev.loc)}</span>`);
+      if (ev.bday) chips.push(`<span class="chip pop"><span class="ico">${ICON.sparkle}</span>Urodziny${ev.byear ? ', rocznik ' + ev.byear : ''}</span>`);
       const rem = effectiveReminders(ev).all;
       if (rem.length) chips.push(`<span class="chip pop"><span class="ico">${ICON.bell}</span>${rem.map(shortRemind).join(', ')}</span>`);
       if (noInfo) chips.push('<button type="button" class="chip ghost" data-k="task">Dodać jako zadanie?</button>');
@@ -115,20 +132,24 @@ export function openQuickAdd({ text = '', mode = 'event', ctxDate = null } = {})
   };
 
   const submit = () => {
-    const p = parsed;
-    if (!p || !p.title) return;
+    const list = parsedAll.filter((x) => x.title);
+    if (!list.length) return;
     haptic();
-    if (kind === 'task') {
-      const t = newTask({ title: p.title, due: p.date || null, dueTime: p.time || null, cat: p.cat || 'inne' });
-      addTask(t);
-      toast(`Dodano zadanie: ${t.title}`, { action: 'Cofnij', onAction: () => { undo(); rerender(); } });
-    } else {
-      const ev = buildFields(p);
-      applyCreationRules(ev);
-      addEvent(ev);
-      const inst = instancesInRange([ev], startOfDay(parseDT(ev.start)), addDays(startOfDay(parseDT(ev.start)), 2))[0];
-      toast(`Dodano: ${ev.title}, ${inst ? whenLabel(inst).toLowerCase() : ''}`, { action: 'Cofnij', onAction: () => { undo(); rerender(); } });
-    }
+    let lastMsg = '';
+    batch(() => { for (const p of list) {
+      if (p.kind === 'task' || (kind === 'task' && list.length === 1)) {
+        const t = newTask({ title: p.title, due: p.date || null, dueTime: p.time || null, cat: p.cat || 'inne' });
+        addTask(t);
+        lastMsg = `Dodano zadanie: ${t.title}`;
+      } else {
+        const ev = buildFields(p);
+        applyCreationRules(ev);
+        addEvent(ev);
+        const inst = instancesInRange([ev], startOfDay(parseDT(ev.start)), addDays(startOfDay(parseDT(ev.start)), 2))[0];
+        lastMsg = `Dodano: ${ev.title}, ${inst ? whenLabel(inst).toLowerCase() : ''}`;
+      }
+    } });
+    toast(list.length > 1 ? `Dodano ${list.length} pozycje` : lastMsg, { action: 'Cofnij', onAction: () => { undo(); rerender(); } });
     closeSheet(h);
     rerender();
   };
@@ -200,6 +221,8 @@ export function openEventEditor({ inst = null, ev = null, draft = null } = {}) {
     rrule: base.rrule ? structuredClone(base.rrule) : null,
     reminders: [...(base.reminders || [])],
     scope: 'series',
+    bday: !!base.bday,
+    byear: base.byear || null,
   };
   const recurringExisting = !!(existing && existing.rrule);
   const isNew = !existing;
@@ -207,6 +230,7 @@ export function openEventEditor({ inst = null, ev = null, draft = null } = {}) {
   const dateVal = (x) => ymd(x);
   const timeVal = (x) => `${pad(x.getHours())}:${pad(x.getMinutes())}`;
   const showDates = () => !recurringExisting || d.scope === 'one';
+  const scopeTxt = { one: 'Zmiany dotyczą tylko tego dnia', following: 'Zmiany obejmą ten dzień i kolejne', series: 'Zmiany obejmą całą serię' };
 
   const freqChip = (f, label) => `<button type="button" class="chip ${(d.rrule ? d.rrule.freq : 'none') === f ? 'on' : ''}" data-f="${f}">${label}</button>`;
 
@@ -217,7 +241,7 @@ export function openEventEditor({ inst = null, ev = null, draft = null } = {}) {
     const byday = d.rrule?.byday?.length ? d.rrule.byday : d.rrule?.freq === 'weekly' ? [d.s.getDay()] : [];
     return `
       <input id="e-title" class="title-in" type="text" placeholder="Nazwa wydarzenia" value="${esc(d.title)}" autocapitalize="sentences" autocomplete="off">
-      ${recurringExisting ? `<div class="field"><span class="ico">${ICON.repeat}</span><div class="grow"><b style="font-weight:600">Wystąpienie: ${esc(fmtDayMid(inst ? inst.start : d.s))}</b><div style="font-size:13px;color:var(--text2)">${d.scope === 'one' ? 'Zmiany dotyczą tylko tego dnia' : 'Zmiany obejmą całą serię'}</div></div><button type="button" class="chip ${d.scope === 'one' ? 'on' : ''}" data-scope="toggle">Tylko ten dzień</button></div>` : ''}
+      ${recurringExisting ? `<div class="field" style="flex-wrap:wrap"><span class="ico">${ICON.repeat}</span><div class="grow"><b style="font-weight:600">Wystąpienie: ${esc(fmtDayMid(inst ? inst.start : d.s))}</b><div style="font-size:13px;color:var(--text2)">${scopeTxt[d.scope]}</div></div><div class="seg" style="width:100%;margin-top:10px">${[['one', 'Tylko ten'], ['following', 'Ten i kolejne'], ['series', 'Cała seria']].map(([k, l]) => `<button type="button" class="${d.scope === k ? 'on' : ''}" data-scope="${k}">${l}</button>`).join('')}</div></div>` : ''}
       <div class="field"><label class="grow" for="e-allday">Cały dzień</label><button type="button" id="e-allday" class="switch ${d.allDay ? 'on' : ''}" role="switch" aria-checked="${d.allDay}" data-t="allday"></button></div>
       ${showDates() ? `
       <div class="field"><span class="ico">${ICON.clock}</span><label class="grow">Początek</label><input type="date" id="e-sd" value="${dateVal(d.s)}">${d.allDay ? '' : `<input type="time" id="e-st" value="${timeVal(d.s)}" style="max-width:96px">`}</div>
@@ -233,6 +257,8 @@ export function openEventEditor({ inst = null, ev = null, draft = null } = {}) {
         <div class="field" style="margin-top:10px"><label class="grow">Co ile</label><input id="e-int" type="number" min="1" max="99" value="${d.rrule.interval || 1}" inputmode="numeric" style="max-width:70px;text-align:right"><span style="color:var(--text2)">${{ daily: 'dni', weekly: 'tyg.', monthly: 'mies.', yearly: 'lat' }[d.rrule.freq]}</span></div>
         ${d.rrule.freq === 'weekly' ? `<div class="dayrow" style="margin-bottom:8px">${dow.map((x) => `<button type="button" class="${byday.includes(x) ? 'on' : ''}" data-dow="${x}">${DAYS_SHORT[x] === 'ndz' ? 'nd' : DAYS_SHORT[x]}</button>`).join('')}</div>` : ''}
         <div class="field"><label class="grow">Do dnia (opcjonalnie)</label><input id="e-until" type="date" value="${d.rrule.until || ''}"></div>` : ''}
+      <div class="field" style="margin-top:12px"><span class="ico">${ICON.sparkle}</span><label class="grow">To urodziny<small style="display:block;color:var(--text2);font-size:12.5px">Co roku, z wiekiem w tytule</small></label><button type="button" class="switch ${d.bday ? 'on' : ''}" role="switch" aria-checked="${!!d.bday}" data-t="bday"></button></div>
+      ${d.bday ? `<div class="field"><label class="grow">Rok urodzenia (opcjonalnie)</label><input id="e-byear" type="number" inputmode="numeric" min="1900" max="2100" placeholder="np. 1990" value="${d.byear || ''}" style="max-width:100px;text-align:right"></div>` : ''}
       <div class="lbl">Przypomnienia</div>
       <div class="chips">${REMIND_OPTS.map((m) => `<button type="button" class="chip ${d.reminders.includes(m) ? 'on' : ''}" data-r="${m}">${m === 0 ? 'W chwili startu' : shortRemind(m)}</button>`).join('')}</div>
       ${viaRules.length ? `<div class="note" style="padding:8px 2px 0"><span class="ico" style="display:inline-flex;width:14px;height:14px;vertical-align:-2px;color:var(--a1)">${ICON.bolt}</span> Reguły dodają: ${viaRules.map((m) => fmtReminder(m).toLowerCase()).join(', ')}</div>` : ''}
@@ -271,6 +297,7 @@ export function openEventEditor({ inst = null, ev = null, draft = null } = {}) {
     if (t.id === 'e-title') d.title = t.value;
     else if (t.id === 'e-loc') d.loc = t.value;
     else if (t.id === 'e-notes') d.notes = t.value;
+    else if (t.id === 'e-byear') d.byear = parseInt(t.value, 10) || null;
     else if (t.id === 'e-int') d.rrule.interval = Math.max(1, parseInt(t.value || '1', 10) || 1);
   });
   el.addEventListener('change', (ev2) => {
@@ -323,6 +350,17 @@ export function openEventEditor({ inst = null, ev = null, draft = null } = {}) {
       haptic();
       return redraw();
     }
+    if (t.dataset.t === 'bday') {
+      d.bday = !d.bday;
+      if (d.bday) {
+        d.allDay = true; d.s = startOfDay(d.s); d.e = new Date(d.s.getFullYear(), d.s.getMonth(), d.s.getDate(), 23, 59);
+        d.rrule = { freq: 'yearly', interval: 1, byday: [], until: null };
+        if (d.cat === 'inne') d.cat = 'rodzina';
+        if (!d.reminders.length) d.reminders = [0, 1440];
+      }
+      haptic();
+      return redraw();
+    }
     if (t.dataset.cat) { d.cat = t.dataset.cat; haptic(); return redraw(); }
     if (t.dataset.f) {
       const f = t.dataset.f;
@@ -341,11 +379,12 @@ export function openEventEditor({ inst = null, ev = null, draft = null } = {}) {
       d.reminders = d.reminders.includes(m) ? d.reminders.filter((x) => x !== m) : [...d.reminders, m].sort((a, b) => a - b);
       return redraw();
     }
-    if (t.dataset.scope === 'toggle') { d.scope = d.scope === 'one' ? 'series' : 'one'; return redraw(); }
+    if (t.dataset.scope) { d.scope = t.dataset.scope; return redraw(); }
     if (t.id === 'e-del') {
       if (recurringExisting && inst) {
-        const ans = await confirmSheet({ title: 'Usunąć wydarzenie cykliczne?', text: 'Możesz usunąć tylko ten dzień albo całą serię.', confirmLabel: 'Usuń całą serię', extra: 'Tylko ten dzień' });
+        const ans = await confirmSheet({ title: 'Usunąć wydarzenie cykliczne?', text: 'Wybierz, co usunąć.', confirmLabel: 'Usuń całą serię', extra: 'Tylko ten dzień', extras: [{ id: 'following', label: 'Ten dzień i kolejne' }] });
         if (ans === 'extra') deleteOccurrence(existing.id, inst.date);
+        else if (ans === 'following') deleteFollowing(inst);
         else if (ans === 'yes') deleteEvent(existing.id);
         else return;
       } else deleteEvent(existing.id);
@@ -361,7 +400,7 @@ export function openEventEditor({ inst = null, ev = null, draft = null } = {}) {
         ti.animate([{ transform: 'translateX(0)' }, { transform: 'translateX(-6px)' }, { transform: 'translateX(6px)' }, { transform: 'translateX(0)' }], { duration: 240 });
         return;
       }
-      const common = { title: d.title.trim(), cat: d.cat, loc: d.loc.trim(), notes: d.notes.trim(), reminders: [...new Set(d.reminders)].sort((a, b) => a - b), allDay: d.allDay };
+      const common = { title: d.title.trim(), cat: d.cat, loc: d.loc.trim(), notes: d.notes.trim(), reminders: [...new Set(d.reminders)].sort((a, b) => a - b), allDay: d.allDay, bday: !!d.bday, byear: d.bday ? d.byear || null : null };
       const rr = d.rrule ? { ...d.rrule, byday: d.rrule.freq === 'weekly' ? (d.rrule.byday?.length ? d.rrule.byday : [d.s.getDay()]) : [], until: d.rrule.until || null } : null;
       if (isNew) {
         const evn = newEvent({ ...common, start: fmtDT(d.s), end: fmtDT(d.e), rrule: rr });
@@ -372,6 +411,11 @@ export function openEventEditor({ inst = null, ev = null, draft = null } = {}) {
         updateEvent(existing.id, p);
       } else if (d.scope === 'one') {
         detachOccurrence(inst, { ...common, start: fmtDT(d.s), end: fmtDT(d.e), rrule: null });
+      } else if (d.scope === 'following') {
+        const dur = d.e - d.s;
+        const day = parseYmd(inst.date);
+        const ns = new Date(day.getFullYear(), day.getMonth(), day.getDate(), d.s.getHours(), d.s.getMinutes());
+        splitSeries(inst, { ...common, start: fmtDT(d.allDay ? startOfDay(ns) : ns), end: fmtDT(d.allDay ? new Date(ns.getFullYear(), ns.getMonth(), ns.getDate(), 23, 59) : new Date(ns.getTime() + dur)), rrule: rr });
       } else {
         const anchor = parseDT(existing.start);
         const dur = d.e - d.s;

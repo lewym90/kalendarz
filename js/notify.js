@@ -27,7 +27,7 @@ function whenLabel(start, now) {
 
 export function briefFor(kind, now = new Date()) {
   const events = state.events;
-  const fmtList = (list, max = 3) => list.slice(0, max).map((i) => (i.allDay ? i.ev.title : `${fmtTime(i.start)} ${i.ev.title}`)).join(', ') + (list.length > max ? ` i ${list.length - max} więcej` : '');
+  const fmtList = (list, max = 3) => list.slice(0, max).map((i) => (i.allDay ? i.title : `${fmtTime(i.start)} ${i.title}`)).join(', ') + (list.length > max ? ` i ${list.length - max} więcej` : '');
   if (kind === 'weekly') {
     const mon = startOfWeek(addDays(startOfDay(now), 1), 1);
     const inst = instancesInRange(events, mon, addDays(mon, 7));
@@ -68,7 +68,7 @@ export function computeAlarms(from, to) {
         kind: 'event',
         ref: inst.key,
         evId: inst.ev.id,
-        title: inst.ev.title,
+        title: inst.title,
         body: inst.allDay ? `${relDay(inst.start, at)}, całodniowe${loc}` : `${r === 0 ? 'Zaczyna się teraz' : whenLabel(inst.start, at)}${loc}`,
       });
     }

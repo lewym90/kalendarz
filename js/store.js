@@ -38,6 +38,8 @@ const DEFAULT_SETTINGS = {
   dayStart: '07:00',
   dayEnd: '23:00',
   city: { name: 'Warszawa', lat: 52.2297, lon: 21.0122 },
+  skin: 'dusk',
+  accentCustom: '',
   welcomed: false,
 };
 
@@ -103,7 +105,14 @@ export function flushSave() {
 
 // Cofanie ostatniej zmiany (zdarzenia + zadania).
 let undoSnapshot = null;
+let batching = false;
+export function batch(fn) {
+  snapshot();
+  batching = true;
+  try { return fn(); } finally { batching = false; }
+}
 export function snapshot() {
+  if (batching) return;
   undoSnapshot = JSON.stringify({ events: state.events, tasks: state.tasks });
 }
 export function undo() {
@@ -180,6 +189,31 @@ export function detachOccurrence(inst, patch) {
   state.events.push(copy);
   save();
   return copy;
+}
+
+// „Ten i kolejne”: seria kończy się dzień przed wystąpieniem, a od niego zaczyna się nowa.
+export function splitSeries(inst, patch) {
+  snapshot();
+  const ev = state.events.find((e) => e.id === inst.ev.id);
+  if (!ev) return null;
+  const first = ymd(parseDT(ev.start)) === inst.date;
+  if (first) { Object.assign(ev, patch); save(); return ev; }
+  const prev = ymd(addDays(parseYmd(inst.date), -1));
+  const copy = { ...structuredClone(ev), id: uid(), exdates: (ev.exdates || []).filter((x) => x >= inst.date), ...patch };
+  ev.rrule = { ...ev.rrule, until: prev };
+  ev.exdates = (ev.exdates || []).filter((x) => x <= prev);
+  state.events.push(copy);
+  save();
+  return copy;
+}
+
+export function deleteFollowing(inst) {
+  snapshot();
+  const ev = state.events.find((e) => e.id === inst.ev.id);
+  if (!ev) return;
+  if (ymd(parseDT(ev.start)) === inst.date) state.events = state.events.filter((e) => e.id !== ev.id);
+  else ev.rrule = { ...ev.rrule, until: ymd(addDays(parseYmd(inst.date), -1)) };
+  save();
 }
 
 function bumpHistory(title, ev) {
