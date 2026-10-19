@@ -71,17 +71,6 @@ document.addEventListener('scroll', (e) => {
   if (t && t.classList && t.classList.contains('screen')) document.body.classList.toggle('scrolled', t.scrollTop > 6);
 }, true);
 
-async function fillPushDbg() {
-  try {
-    const el = document.getElementById('push-dbg');
-    if (!el) return;
-    const r = await (await caches.open('kalendarz-dbg')).match('/dbg.json');
-    if (!r) { el.textContent = 'Diagnostyka pusha: brak odebranych powiadomień z serwera.'; return; }
-    const j = await r.json();
-    el.textContent = `Diagnostyka pusha ${new Date(j.t).toLocaleTimeString('pl-PL')}: ${j.msg}`;
-  } catch (_) { /* nic */ }
-}
-
 function render() {
   const key = nav.tab + (nav.tab === 'cal' ? ':' + nav.calView : '');
   const scroll = view.scrollTop;
@@ -118,7 +107,6 @@ function render() {
   needScroll = false;
   renderDock();
   requestAnimationFrame(() => document.body.classList.toggle('scrolled', view.scrollTop > 6));
-  if (nav.tab === 'hub') fillPushDbg();
 }
 setRender(render);
 
@@ -256,23 +244,6 @@ const actions = {
     if (r === 'granted') { toast('Powiadomienia włączone'); testNotification(); } else if (r === 'denied') toast('Powiadomienia zablokowane w ustawieniach iPhone\'a');
     else toast('Powiadomienia nie są tu dostępne. Dodaj aplikację do ekranu początkowego.');
     render();
-  },
-  'screen-test'() {
-    const cols = [
-      ['fixed top+bottom 0', 'top:0;bottom:0'],
-      ['100vh', 'top:0;height:100vh'],
-      ['100dvh', 'top:0;height:100dvh'],
-      ['100lvh', 'top:0;height:100lvh'],
-      ['100svh', 'top:0;height:100svh'],
-      ['fill-available', 'top:0;height:-webkit-fill-available'],
-      ['screen.height', `top:0;height:${screen.height}px`],
-      ['screen+safe', `top:0;height:calc(${screen.height}px + env(safe-area-inset-bottom))`],
-    ];
-    const o = document.createElement('div');
-    o.style.cssText = 'position:fixed;inset:0;z-index:9999;background:#000';
-    o.innerHTML = cols.map(([l, st], i) => `<div style="position:fixed;left:${i * 12.5}%;width:12.5%;${st};background:hsl(${i * 45},80%,45%);color:#fff;font:600 11px/1.1 sans-serif;display:flex;align-items:flex-end;justify-content:center;border-right:2px solid #000"><span style="writing-mode:vertical-rl;transform:rotate(180deg);padding:8px 0 70px">${l}</span></div>`).join('') + `<div style="position:fixed;top:70px;left:0;right:0;text-align:center;color:#fff;font:600 13px sans-serif;text-shadow:0 0 4px #000">Dotknij, aby zamknąć<br>inner ${innerHeight} / screen ${screen.height}</div>`;
-    o.onclick = () => o.remove();
-    document.body.appendChild(o);
   },
   'push-connect'() {
     const h = openSheet(`<div class="grab"><i></i></div>
