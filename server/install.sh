@@ -45,9 +45,9 @@ for f in push-server.mjs package.json; do curl -fsSL "$RAW/$f" -o "$APP/$f" || d
 if [ ! -f "$ENVF" ]; then
   K="$(cd "$APP" && "$NODE" -e "import('web-push').then(m=>{const k=(m.default||m).generateVAPIDKeys();console.log(k.publicKey+' '+k.privateKey)})")"
   CODE="$(head -c 24 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 10)"
-  umask 077
+  ( umask 077
   { echo "PORT=$PORT"; echo "HOST=127.0.0.1"; echo "DATA_FILE=$APP/data/db.json"; echo "SETUP_CODE=$CODE"
-    echo "VAPID_PUBLIC=${K%% *}"; echo "VAPID_PRIVATE=${K##* }"; } > "$ENVF"
+    echo "VAPID_PUBLIC=${K%% *}"; echo "VAPID_PRIVATE=${K##* }"; } > "$ENVF" )
 fi
 chmod 600 "$ENVF"
 chown -R "$USR":"$USR" "$APP/data"
@@ -74,6 +74,7 @@ MemoryMax=200M
 [Install]
 WantedBy=multi-user.target
 U
+chmod 644 /etc/systemd/system/kalendarz-push.service
 systemctl daemon-reload && systemctl enable --now kalendarz-push >/dev/null 2>&1
 systemctl restart kalendarz-push; sleep 2
 systemctl is-active --quiet kalendarz-push || { journalctl -u kalendarz-push -n 20 --no-pager >&2; die "usługa nie wystartowała (Caddy i Typer nietknięte)"; }
@@ -87,6 +88,7 @@ handle_path /kalendarz-push/* {
 	reverse_proxy 127.0.0.1:$PORT
 }
 R
+chmod 755 "$CD"; chmod 644 "$ROUTE"
 rollback() { say "WYCOFUJĘ trasę"; if [ -f "$ROUTE.bak" ]; then mv -f "$ROUTE.bak" "$ROUTE"; else rm -f "$ROUTE"; fi; systemctl reload caddy 2>/dev/null || systemctl restart caddy; exit 1; }
 caddy validate --config "$CF" --adapter caddyfile >/dev/null 2>&1 || { echo "Caddy odrzucił konfigurację." >&2; rollback; }
 systemctl reload caddy || rollback
