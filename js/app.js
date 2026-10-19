@@ -51,13 +51,16 @@ let animT = 0;
 function fitScreen() {
   const root = document.documentElement;
   let gap = 0;
-  if (isStandalone() && window.innerHeight > window.innerWidth) {
+  const vv = window.visualViewport ? Math.round(window.visualViewport.height) : 0;
+  const inner = Math.max(window.innerHeight, vv, root.clientHeight);
+  if (window.innerHeight > window.innerWidth) {
     const full = Math.max(screen.height, screen.width);
-    const d = full - window.innerHeight;
-    if (d > 4 && d < 120) gap = d;
+    const d = full - inner;
+    if (d > 4 && d < 140 && (isStandalone() || matchMedia('(display-mode: standalone)').matches)) gap = d;
   }
   root.style.setProperty('--gap', gap + 'px');
   window.__gap = gap;
+  window.__vp = `inner ${window.innerHeight}, vv ${vv}, client ${root.clientHeight}, screen ${screen.height}, standalone ${isStandalone()}`;
 }
 fitScreen();
 window.addEventListener('resize', fitScreen);
