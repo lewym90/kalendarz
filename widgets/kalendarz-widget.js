@@ -83,30 +83,30 @@ function icon(p, name, size, color) {
 }
 function centered(p, fn) { const s = p.addStack(); s.addSpacer(); fn(s); s.addSpacer(); return s; }
 
-function monthGrid(p, m, o) {
+function monthImage(m, o) {
   const now = m.now, y = now.getFullYear(), mo = now.getMonth();
   const first = (new Date(y, mo, 1).getDay() + 6) % 7, dim = new Date(y, mo + 1, 0).getDate();
-  const ttl = p.addStack(); ttl.size = new Size(o.cell * 7, o.title + 3);
-  txt(ttl, `${MONTHS_N[mo]} ${y}`, o.title, 'b', C(ACCENT));
-  const head = p.addStack(); head.spacing = 0;
-  ['P', 'W', 'Ś', 'C', 'P', 'S', 'N'].forEach((d, i) => { const c = head.addStack(); c.size = new Size(o.cell, o.hrow); c.centerAlignContent(); centered(c, (s) => txt(s, d, o.size - 1.5, 'm', i > 4 ? FAINT() : DIM())); });
   const rows = Math.ceil((first + dim) / 7);
+  const W = o.cell * 7, TOP = o.title + o.hrow + 2, H = TOP + 6 * o.row;
+  const dc = new DrawContext();
+  dc.size = new Size(W, H); dc.opaque = false; dc.respectScreenScale = true;
+  const put = (s, x, y0, w, h, font, color, center) => { dc.setFont(font); dc.setTextColor(color); if (center) dc.setTextAlignedCenter(); else dc.setTextAlignedLeft(); dc.drawTextInRect(String(s), new Rect(x, y0, w, h)); };
+  put(MONTHS_N[mo][0].toUpperCase() + MONTHS_N[mo].slice(1) + ' ' + y, 1, 0, W, o.title + 3, Font.boldSystemFont(o.title), C(ACCENT), false);
+  ['P', 'W', 'Ś', 'C', 'P', 'S', 'N'].forEach((d, i) => put(d, i * o.cell, o.title + 2, o.cell, o.hrow, Font.mediumSystemFont(o.size - 2), i > 4 ? FAINT() : DIM(), true));
   for (let r = 0; r < rows; r++) {
-    const row = p.addStack(); row.spacing = 0;
     for (let c = 0; c < 7; c++) {
       const day = r * 7 + c - first + 1;
-      const cell = row.addStack(); cell.size = new Size(o.cell, o.row); cell.layoutVertically(); cell.centerAlignContent();
       if (day < 1 || day > dim) continue;
       const key = `${y}-${pad(mo + 1)}-${pad(day)}`, isToday = day === now.getDate();
-      centered(cell, (s) => {
-        const pill = s.addStack(); pill.size = new Size(o.pill, o.pill); pill.cornerRadius = o.pill / 2; pill.centerAlignContent();
-        if (isToday) pill.backgroundColor = C(ACCENT);
-        centered(pill, (q) => txt(q, day, o.size, isToday ? 'h' : 'm', isToday ? WHITE() : (c > 4 ? DIM() : WHITE())));
-      });
-      centered(cell, (s) => { const d = s.addStack(); d.size = new Size(3, 3); d.cornerRadius = 1.5; if (m.cnt[key]) d.backgroundColor = isToday ? C(ACCENT) : C('#ffffff', 0.85); });
+      const cx = c * o.cell + o.cell / 2, cy = TOP + r * o.row + o.pill / 2;
+      if (isToday) { dc.setFillColor(C(ACCENT)); dc.fillEllipse(new Rect(cx - o.pill / 2, cy - o.pill / 2, o.pill, o.pill)); }
+      put(day, c * o.cell, cy - o.size * 0.62, o.cell, o.size + 4, isToday ? Font.heavySystemFont(o.size) : Font.mediumSystemFont(o.size), isToday ? WHITE() : (c > 4 ? C('#ffffff', 0.6) : WHITE()), true);
+      if (m.cnt[key] && !isToday) { dc.setFillColor(C(ACCENT)); dc.fillEllipse(new Rect(cx - 1.5, cy + o.pill / 2 + 0.5, 3, 3)); }
     }
   }
+  return { img: dc.getImage(), size: new Size(W, H) };
 }
+function monthGrid(p, m, o) { const r = monthImage(m, o); const im = p.addImage(r.img); im.imageSize = r.size; return im; }
 function planRow(p, i, now, o) {
   const r = p.addStack(); r.centerAlignContent(); r.spacing = 6; r.size = new Size(o.w, o.h);
   const bar = r.addStack(); bar.size = new Size(3, o.h - 3); bar.cornerRadius = 1.5; bar.backgroundColor = i.isNow ? C(ACCENT) : (i.c ? C(i.c) : C('#ffffff', 0.5));
@@ -171,8 +171,8 @@ function lockWidget(w, family, m, wx, stale) {
 // ---------- Ekran główny ----------
 function glass(w, param) {
   const g = new LinearGradient();
-  if (param === 'slate') { g.colors = [C('#353c4e', 0.96), C('#252a39', 0.98)]; }
-  else { g.colors = [C('#33261f', 0.84), C('#14100e', 0.92)]; }
+  if (param === 'szklo') g.colors = [C('#33261f', 0.84), C('#14100e', 0.92)];
+  else g.colors = [C('#3b4357', 0.94), C('#232837', 0.97)];
   g.locations = [0, 1];
   w.backgroundGradient = g;
 }
@@ -195,14 +195,16 @@ function homeWidget(w, family, m, wx, stale, param) {
   }
 
   if (family === 'medium') {
-    w.setPadding(11, 14, 9, 14);
-    const body = w.addStack(); body.spacing = 13;
-    const lc = body.addStack(); lc.layoutVertically(); lc.spacing = 0;
-    monthGrid(lc, m, { cell: 19, row: 16, hrow: 12, pill: 14, size: 10, title: 11 });
-    const rc = body.addStack(); rc.layoutVertically(); rc.spacing = 3;
-    txt(rc, dateStr, 11, 'b', C(ACCENT));
+    w.setPadding(10, 13, 8, 13);
+    const body = w.addStack(); body.spacing = 11; body.centerAlignContent();
+    const lc = body.addStack(); lc.layoutVertically();
+    monthGrid(lc, m, { cell: 20, row: 17, hrow: 12, pill: 15, size: 10.5, title: 11.5 });
+    const dv = body.addStack(); dv.size = new Size(0.5, 128); dv.backgroundColor = C('#ffffff', 0.16);
+    const rc = body.addStack(); rc.layoutVertically(); rc.spacing = 4;
+    txt(rc, dateStr.charAt(0).toUpperCase() + dateStr.slice(1), 12, 'b', WHITE());
     weatherRow(rc, wx, { icon: 24, temp: 26, size: 11 });
-    plan(rc, m, 3, { size: 12, h: 19, tw: 36, w: 170 });
+    const hr = rc.addStack(); hr.size = new Size(160, 0.5); hr.backgroundColor = C('#ffffff', 0.14);
+    plan(rc, m, 3, { size: 12, h: 19, tw: 36, w: 160 });
     rc.addSpacer();
     return;
   }
@@ -217,7 +219,7 @@ function homeWidget(w, family, m, wx, stale, param) {
   if (wx) { w.addSpacer(6); hourly(w, wx, { w: 52, size: 12, icon: 15 }); }
   w.addSpacer(8);
   const mid = w.addStack(); mid.spacing = 14;
-  const lc = mid.addStack(); lc.layoutVertically(); monthGrid(lc, m, { cell: 21, row: 19, hrow: 13, pill: 16, size: 11, title: 12 });
+  const lc = mid.addStack(); lc.layoutVertically(); monthGrid(lc, m, { cell: 22, row: 21, hrow: 14, pill: 17, size: 11.5, title: 12.5 });
   const rc = mid.addStack(); rc.layoutVertically(); rc.spacing = 3;
   txt(rc, `Plan dnia · ${m.remaining}`, 12, 'b', DIM());
   plan(rc, m, 6, { size: 12, h: 21, tw: 38, w: 150 });
