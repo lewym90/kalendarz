@@ -18,7 +18,7 @@ const b64ToBytes = (s) => {
 const newId = () => { const a = new Uint8Array(18); crypto.getRandomValues(a); return btoa(String.fromCharCode(...a)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, ''); };
 
 async function api(cfg, path, body, method = 'POST') {
-  const r = await fetch(`${cfg.url}${path}`, { method, headers: { 'Content-Type': 'application/json', ...(cfg.token ? { Authorization: `Bearer ${cfg.token}` } : {}) }, body: method === 'POST' ? JSON.stringify(body || {}) : undefined }).catch(() => { throw new Error('Nie mogę połączyć się z serwerem. Sprawdź adres i internet.'); });
+  const r = await fetch(`${cfg.url}${path}`, { method, headers: { 'Content-Type': 'application/json', ...(cfg.token ? { Authorization: `Bearer ${cfg.token}` } : {}) }, body: method === 'POST' ? JSON.stringify(body || {}) : undefined, keepalive: method === 'POST' && path === '/sync' }).catch(() => { throw new Error('Nie mogę połączyć się z serwerem. Sprawdź adres i internet.'); });
   const j = await r.json().catch(() => ({}));
   if (!r.ok) throw Object.assign(new Error(j.error || `Błąd ${r.status}`), { status: r.status });
   return j;
@@ -90,13 +90,15 @@ export async function pushTest() {
 }
 
 let timer = null;
-export function schedulePushSync(ms = 4000) {
+export function schedulePushSync(ms = 800) {
   if (!read()) return;
   clearTimeout(timer);
   timer = setTimeout(() => pushSync(), ms);
 }
 export function initPush() {
   onChange(() => schedulePushSync());
-  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') schedulePushSync(1500); });
+  const flush = () => { if (!read()) return; clearTimeout(timer); pushSync(); };
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') schedulePushSync(1500); else flush(); });
+  window.addEventListener('pagehide', flush);
   schedulePushSync(2500);
 }
