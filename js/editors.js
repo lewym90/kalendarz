@@ -292,6 +292,25 @@ export function openEventEditor({ inst = null, ev = null, draft = null } = {}) {
     return new Date(y, m - 1, dd, hh, mm);
   };
 
+  // Pola daty/godziny nie mogą być odtwarzane podczas wybierania (iOS zamyka wtedy okienko). Aktualizujemy je „w miejscu”,
+  // a pełne odświeżenie formularza robimy dopiero po zamknięciu okienka.
+  let dtDirty = false;
+  const putVal = (id, v) => { const x = $(id, el); if (x && x.value !== v) x.value = v; };
+  const dtSoft = () => {
+    dtDirty = true;
+    putVal('#e-sd', dateVal(d.s)); putVal('#e-ed', dateVal(d.e));
+    if (!d.allDay) { putVal('#e-st', timeVal(d.s)); putVal('#e-et', timeVal(d.e)); }
+  };
+  el.addEventListener('focusout', (ev2) => {
+    if (!dtDirty || !/^(date|time)$/.test(ev2.target.type || '')) return;
+    setTimeout(() => {
+      const ae = document.activeElement;
+      if (ae && /^(date|time)$/.test(ae.type || '') && el.contains(ae)) return;
+      if (!dtDirty) return;
+      dtDirty = false; redraw();
+    }, 350);
+  });
+
   el.addEventListener('input', (ev2) => {
     const t = ev2.target;
     if (t.id === 'e-title') d.title = t.value;
@@ -307,14 +326,14 @@ export function openEventEditor({ inst = null, ev = null, draft = null } = {}) {
       const ns = dtOf($('#e-sd', el)?.value, $('#e-st', el)?.value || '00:00', d.s);
       keepDuration(d.allDay ? startOfDay(ns) : ns);
       if (d.allDay) d.e = new Date(d.e.getFullYear(), d.e.getMonth(), d.e.getDate(), 23, 59);
-      redraw();
+      dtSoft();
     } else if (t.id === 'e-ed' || t.id === 'e-et') {
       let ne = dtOf($('#e-ed', el)?.value || ymd(d.e), $('#e-et', el)?.value || timeVal(d.e), d.e);
       if (!showDates()) ne = new Date(d.s.getFullYear(), d.s.getMonth(), d.s.getDate(), ne.getHours(), ne.getMinutes());
       if (d.allDay) ne = new Date(ne.getFullYear(), ne.getMonth(), ne.getDate(), 23, 59);
       if (ne <= d.s) ne = d.allDay ? new Date(d.s.getFullYear(), d.s.getMonth(), d.s.getDate(), 23, 59) : addMinutes(d.s, 30);
       d.e = ne;
-      redraw();
+      dtSoft();
     } else if (t.id === 'e-until') {
       d.rrule.until = t.value || null;
     }
@@ -332,7 +351,7 @@ export function openEventEditor({ inst = null, ev = null, draft = null } = {}) {
       let ne = new Date(day.getFullYear(), day.getMonth(), day.getDate(), eh, em);
       if (ne <= d.s) ne = addMinutes(d.s, 30);
       d.e = ne;
-      redraw();
+      dtSoft();
     }
   });
 
@@ -463,10 +482,19 @@ export function openTaskEditor({ id = null, draft = null } = {}) {
   const el = h.el;
   const bodyEl = $('#t-body', el);
   const redraw = () => { const top = bodyEl.scrollTop; bodyEl.innerHTML = body(); bodyEl.scrollTop = top; };
+  let dueDirty = false;
   el.addEventListener('input', (e) => { if (e.target.id === 't-title') d.title = e.target.value; });
   el.addEventListener('change', (e) => {
-    if (e.target.id === 't-due') { d.due = e.target.value || null; redraw(); }
+    if (e.target.id === 't-due') { d.due = e.target.value || null; dueDirty = true; }
     if (e.target.id === 't-time') d.dueTime = e.target.value || null;
+  });
+  el.addEventListener('focusout', (e) => {
+    if (!dueDirty || !/^(date|time)$/.test(e.target.type || '')) return;
+    setTimeout(() => {
+      const ae = document.activeElement;
+      if (ae && /^(date|time)$/.test(ae.type || '') && el.contains(ae)) return;
+      if (dueDirty) { dueDirty = false; redraw(); }
+    }, 350);
   });
   el.addEventListener('click', (e) => {
     const t = e.target.closest('button');

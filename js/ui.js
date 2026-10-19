@@ -111,7 +111,7 @@ export function layoutForKeyboard() {
   if (!vv) return;
   const kb = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
   for (const h of stack) {
-    h.el.style.bottom = kb + 'px';
+    h.el.style.bottom = kb > 0 ? kb + 'px' : '';
     h.el.style.maxHeight = Math.round(vv.height * 0.94) + 'px';
   }
 }

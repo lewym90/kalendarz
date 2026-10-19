@@ -801,6 +801,7 @@ export function renderHub() {
       <div class="row"><span class="ico">${ICON.clock}</span><span class="rt"><b>Domyślne przypomnienie</b><small>Dla nowych wydarzeń</small></span><select data-in="defaultRemind" data-arr="1" aria-label="Domyślne przypomnienie">${[[[], 'Brak'], [[0], 'W chwili startu'], [[5], '5 min'], [[10], '10 min'], [[15], '15 min'], [[30], '30 min'], [[60], '1 godz.']].map(([v, l]) => `<option value='${JSON.stringify(v)}' ${JSON.stringify(s.defaultRemind) === JSON.stringify(v) ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
     </div>
     ${!standalone ? `<p class="note"><b>Instalacja:</b> w Safari dotknij Udostępnij, potem „Dodaj do ekranu początkowego". Dopiero wtedy iOS pozwala na powiadomienia i licznik na ikonie.</p>` : ''}
+    <p class="note" style="opacity:.55;font-size:12px">Ekran: okno ${window.innerWidth}×${window.innerHeight}, urządzenie ${Math.max(screen.width, screen.height)}, luka ${window.__gap || 0}px.</p>
     <p class="note">Wibracje przy powiadomieniach zależą od systemu: w Ustawienia, Dźwięki i haptyka, włącz „Odtwarzaj haptykę w trybie cichym".</p>
   </section>
 

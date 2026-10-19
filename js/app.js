@@ -9,6 +9,7 @@ import { nav, saveNav, setRender, rerender, toast, showBanner, confirmSheet, clo
 import { renderToday, renderCal, renderTasks, renderHub, paintWeather, bindGridDrag, bindMonthDrag, bindTray, dragState, instOf, skyPhase } from './screens.js';
 import { openQuickAdd, openEventEditor, openTaskEditor, openRuleEditor, openCatEditor, openSearch, openCitySheet, defaultDraftFor } from './editors.js';
 import { pushConfig, pushConnect, pushDisconnect, pushTest, pushSync, initPush, pushSupported } from './push.js';
+import { isStandalone } from './notify.js';
 import { tick, snooze, updateBadge, enableNotifications, testNotification, setHandlers, briefFor } from './notify.js';
 import { initLock, openLockSettings } from './lock.js';
 import { openFindSlot, openStats, importICS } from './tools.js';
@@ -45,6 +46,27 @@ let needScroll = true;
 let nextAnim = '';
 let animT = 0;
 
+// iOS potrafi oddać aplikacji z ekranu początkowego krótszy „viewport” niż fizyczny ekran: wtedy na dole zostaje pusty pas.
+// Mierzymy tę lukę i rozciągamy interfejs do samego dołu ekranu.
+function fitScreen() {
+  const root = document.documentElement;
+  let gap = 0;
+  if (isStandalone() && window.innerHeight > window.innerWidth) {
+    const full = Math.max(screen.height, screen.width);
+    const d = full - window.innerHeight;
+    if (d > 4 && d < 120) gap = d;
+  }
+  root.style.setProperty('--gap', gap + 'px');
+  window.__gap = gap;
+}
+fitScreen();
+window.addEventListener('resize', fitScreen);
+window.addEventListener('orientationchange', () => setTimeout(fitScreen, 300));
+document.addEventListener('scroll', (e) => {
+  const t = e.target;
+  if (t && t.classList && t.classList.contains('screen')) document.body.classList.toggle('scrolled', t.scrollTop > 6);
+}, true);
+
 function render() {
   const key = nav.tab + (nav.tab === 'cal' ? ':' + nav.calView : '');
   const scroll = view.scrollTop;
@@ -80,6 +102,7 @@ function render() {
   }
   needScroll = false;
   renderDock();
+  requestAnimationFrame(() => document.body.classList.toggle('scrolled', view.scrollTop > 6));
 }
 setRender(render);
 
