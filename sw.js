@@ -1,5 +1,5 @@
 // Service worker: działanie offline, powiadomienia, obsługa kliknięć i (opcjonalnie) push z serwera.
-const VERSION = 'kalendarz-v7';
+const VERSION = 'kalendarz-v8';
 const SHELL = [
   './', 'index.html', 'manifest.webmanifest', 'css/app.css',
   'js/app.js', 'js/util.js', 'js/store.js', 'js/recur.js', 'js/nlp.js', 'js/notify.js', 'js/weather.js', 'js/ui.js', 'js/editors.js', 'js/screens.js', 'js/extras.js', 'js/data/imieniny.js', 'js/ics.js', 'js/planner.js', 'js/tools.js', 'js/lock.js', 'js/push.js',
@@ -9,7 +9,7 @@ const SHELL = [
 ];
 
 self.addEventListener('install', (e) => {
-  e.waitUntil(caches.open(VERSION).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));
+  e.waitUntil(caches.open(VERSION).then((c) => Promise.all(SHELL.map((u) => fetch(new Request(u, { cache: 'reload' })).then((r) => { if (!r.ok) throw new Error(u); return c.put(u, r); })))).then(() => self.skipWaiting()));
 });
 
 self.addEventListener('activate', (e) => {
@@ -18,21 +18,25 @@ self.addEventListener('activate', (e) => {
   );
 });
 
-// Najpierw cache (szybki start), w tle odświeżanie. Zewnętrzne API (pogoda) idzie prosto do sieci.
+// Kod (HTML/JS/CSS): najpierw sieć (z obejściem pamięci podręcznej przeglądarki, max 3 s), przy braku sieci — kopia offline.
+// Czcionki i ikony: najpierw kopia, odświeżanie w tle. Zewnętrzne API (pogoda) idzie prosto do sieci.
+const isStatic = (u) => /\.(woff2?|png|jpg|svg|ico)$/i.test(u.pathname);
 self.addEventListener('fetch', (e) => {
   const req = e.request;
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
   if (url.origin !== location.origin) return;
+  const store = (res) => { if (res && res.ok) caches.open(VERSION).then((c) => c.put(req, res.clone())); return res; };
+  if (isStatic(url)) {
+    e.respondWith(caches.match(req, { ignoreSearch: true }).then((hit) => hit || fetch(req).then(store)));
+    return;
+  }
   e.respondWith(
-    caches.match(req, { ignoreSearch: true }).then((hit) => {
-      const net = fetch(req)
-        .then((res) => {
-          if (res.ok) caches.open(VERSION).then((c) => c.put(req, res.clone()));
-          return res;
-        })
-        .catch(() => hit || caches.match('index.html'));
-      return hit || net;
+    new Promise((resolve) => {
+      let done = false;
+      const fallback = () => caches.match(req, { ignoreSearch: true }).then((hit) => hit || caches.match('index.html'));
+      const t = setTimeout(() => { if (!done) fallback().then((h) => { if (h && !done) { done = true; resolve(h); } }); }, 3000);
+      fetch(req, { cache: 'no-cache' }).then((res) => { if (done) return store(res); done = true; clearTimeout(t); resolve(store(res)); }).catch(() => { if (!done) { done = true; clearTimeout(t); fallback().then(resolve); } });
     })
   );
 });

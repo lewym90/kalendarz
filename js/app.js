@@ -447,7 +447,9 @@ document.body.appendChild(fileInput);
 if ('serviceWorker' in navigator) {
   const hadController = !!navigator.serviceWorker.controller;
   let reloaded = false;
-  navigator.serviceWorker.register('sw.js').catch((e) => console.warn('SW', e));
+  navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then((reg) => {
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') reg.update().catch(() => {}); });
+  }).catch((e) => console.warn('SW', e));
   navigator.serviceWorker.addEventListener('controllerchange', () => {
     if (hadController && !reloaded && !sheetOpen()) { reloaded = true; location.reload(); }
   });
