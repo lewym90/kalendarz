@@ -196,15 +196,15 @@ function homeWidget(w, family, m, wx, stale, param) {
 
   if (family === 'medium') {
     w.setPadding(10, 13, 8, 13);
-    const body = w.addStack(); body.spacing = 11; body.centerAlignContent();
+    const body = w.addStack(); body.spacing = 9; body.centerAlignContent();
     const lc = body.addStack(); lc.layoutVertically();
-    monthGrid(lc, m, { cell: 20, row: 17, hrow: 12, pill: 15, size: 10.5, title: 11.5 });
-    const dv = body.addStack(); dv.size = new Size(0.5, 128); dv.backgroundColor = C('#ffffff', 0.16);
+    monthGrid(lc, m, { cell: 22, row: 18.5, hrow: 13, pill: 17, size: 11.5, title: 12.5 });
+    const dv = body.addStack(); dv.size = new Size(0.5, 132); dv.backgroundColor = C('#ffffff', 0.16);
     const rc = body.addStack(); rc.layoutVertically(); rc.spacing = 4;
-    txt(rc, dateStr.charAt(0).toUpperCase() + dateStr.slice(1), 12, 'b', WHITE());
-    weatherRow(rc, wx, { icon: 24, temp: 26, size: 11 });
-    const hr = rc.addStack(); hr.size = new Size(160, 0.5); hr.backgroundColor = C('#ffffff', 0.14);
-    plan(rc, m, 3, { size: 12, h: 19, tw: 36, w: 160 });
+    txt(rc, `${DAYS3[now.getDay()].replace('.', '')} ${now.getDate()} ${MONTHS[now.getMonth()]}`.replace(/^./, (c) => c.toUpperCase()), 12, 'b', WHITE());
+    weatherRow(rc, wx, { icon: 22, temp: 25, size: 10.5 });
+    const hr = rc.addStack(); hr.size = new Size(130, 0.5); hr.backgroundColor = C('#ffffff', 0.14);
+    plan(rc, m, 3, { size: 12, h: 19, tw: 34, w: 130 });
     rc.addSpacer();
     return;
   }
