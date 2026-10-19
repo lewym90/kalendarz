@@ -35,5 +35,9 @@ iOS usypia aplikacje w tle, więc lokalne przypomnienia działają głównie prz
 
 Aplikacja wysyła serwerowi alarmy na najbliższe 14 dni i odświeża je po każdej zmianie. Serwer zapisuje tylko to, co potrzebne do wysyłki, a token urządzenia trzyma jako skrót. Testy serwera: `cd server && npm install && npm test`.
 
+### Widget na ekran blokady i główny (Scriptable)
+
+Po połączeniu z serwerem aplikacja wysyła mu plan dnia na 7 dni. Serwer udostępnia go pod tajnym adresem, a skrypt `widgets/kalendarz-widget.js` rysuje z niego widgety w bezpłatnej aplikacji Scriptable (ekran blokady: wiersz, prostokąt, kółko; ekran główny: mały, średni, duży). W Centrum przycisk „Kopiuj skrypt” kopiuje loader z Twoim adresem; sam kod widgetu aktualizuje się automatycznie.
+
 ## Testy
 `npm test` (Node 22, bez zależności): parser zdań, powtarzanie, święta, import .ics, wolne terminy, podział serii.

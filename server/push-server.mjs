@@ -93,7 +93,7 @@ const limited = (ip) => {
   return hits.get(k) > 120;
 };
 
-function readBody(req, max = 400_000) {
+function readBody(req, max = 600_000) {
   return new Promise((resolve, reject) => {
     let n = 0; const chunks = [];
     req.on('data', (c) => { n += c.length; if (n > max) { reject(Object.assign(new Error('za duże'), { code: 413 })); req.destroy(); } else chunks.push(c); });
@@ -109,10 +109,28 @@ const clean = (a) => ({
   tag: String(a.tag || a.id).slice(0, 120), url: String(a.url || './').slice(0, 200),
 });
 
+const str = (v, n) => String(v == null ? '' : v).slice(0, n);
+export function cleanAgenda(a) {
+  if (!a || !Array.isArray(a.days)) return null;
+  const days = a.days.slice(0, 8).map((d) => ({
+    d: str(d.d, 10),
+    items: (Array.isArray(d.items) ? d.items : []).slice(0, 60).map((i) => ({
+      k: i.k === 't' ? 't' : 'e', s: str(i.s, 5), e: str(i.e, 5), ad: i.ad ? 1 : 0, t: str(i.t, 120), l: str(i.l, 80), c: /^#[0-9a-fA-F]{6}$/.test(i.c || '') ? i.c : '', done: i.done ? 1 : 0,
+    })),
+  })).filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d.d));
+  return { gen: Date.now(), days, extra: str(a.extra, 160) };
+}
+
 export async function handle(method, url, headers, body) {
   const route = url.split('?')[0].replace(/\/+$/, '') || '/';
   if (method === 'GET' && route === '/health') return [200, { ok: true, devices: Object.keys(db.devices).length }];
   if (method === 'GET' && route === '/vapid') return [200, { publicKey: cfg.vapidPublic }];
+  if (method === 'GET' && route.startsWith('/widget/')) {
+    const tok = route.slice(8);
+    const dev = tok.length >= 16 ? Object.values(db.devices).find((x) => x.wtoken && safeEq(x.wtoken, tok)) : null;
+    if (!dev || !dev.agenda) return [404, { error: 'brak danych' }];
+    return [200, { ...dev.agenda, now: Date.now() }];
+  }
   const auth = (headers.authorization || '').replace(/^Bearer\s+/i, '');
   if (method === 'POST' && route === '/subscribe') {
     const { deviceId, setup, subscription } = body || {};
@@ -137,8 +155,11 @@ export async function handle(method, url, headers, body) {
     const now = Date.now();
     const list = (Array.isArray(body.alarms) ? body.alarms : []).filter((a) => a && a.id && Number.isFinite(+a.at) && +a.at > now - cfg.lateMs && +a.at < now + 15 * 86400000).slice(0, cfg.maxAlarms).map(clean);
     dev.alarms = list.filter((a) => !(dev.sent || {})[a.id]);
+    const ag = cleanAgenda(body.agenda);
+    if (ag) dev.agenda = ag;
+    if (!dev.wtoken) dev.wtoken = crypto.randomBytes(24).toString('base64url');
     dev.sync = now; touch(); saveDb();
-    return [200, { ok: true, queued: dev.alarms.length }];
+    return [200, { ok: true, queued: dev.alarms.length, widget: dev.wtoken }];
   }
   if (method === 'POST' && route === '/unsubscribe') { delete db.devices[id]; touch(); saveDb(); return [200, { ok: true }]; }
   if (method === 'POST' && route === '/test') {

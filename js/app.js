@@ -8,7 +8,7 @@ import { instancesInRange } from './recur.js';
 import { nav, saveNav, setRender, rerender, toast, showBanner, confirmSheet, closeTopSheet, sheetOpen, openSheet, closeSheet } from './ui.js';
 import { renderToday, renderCal, renderTasks, renderHub, paintWeather, bindGridDrag, bindMonthDrag, bindTray, dragState, instOf, skyPhase } from './screens.js';
 import { openQuickAdd, openEventEditor, openTaskEditor, openRuleEditor, openCatEditor, openSearch, openCitySheet, defaultDraftFor } from './editors.js';
-import { pushConfig, pushConnect, pushDisconnect, pushTest, pushSync, initPush, pushSupported } from './push.js';
+import { widgetLoaderScript, pushConfig, pushConnect, pushDisconnect, pushTest, pushSync, initPush, pushSupported } from './push.js';
 import { isStandalone } from './notify.js';
 import { tick, snooze, updateBadge, enableNotifications, testNotification, setHandlers, briefFor } from './notify.js';
 import { initLock, openLockSettings } from './lock.js';
@@ -263,6 +263,12 @@ const actions = {
     };
   },
   async 'push-disconnect'() { await pushDisconnect(); toast('Rozłączono'); render(); },
+  async 'copy-widget'() {
+    if (!pushConfig()?.widget) await pushSync(true);
+    const code = widgetLoaderScript();
+    if (!code) { toast('Najpierw połącz powiadomienia z serwerem'); return; }
+    try { await navigator.clipboard.writeText(code); toast('Skopiowano. Wklej w Scriptable (nowy skrypt)'); } catch (_) { toast('Nie udało się skopiować'); }
+  },
   async 'push-test'() { try { await pushTest(); toast('Wysłano test z serwera'); } catch (e) { toast(e.message || 'Test nie powiódł się'); } },
   async 'push-sync'() { const ok = await pushSync(true); toast(ok ? 'Zsynchronizowano' : 'Synchronizacja nie powiodła się'); render(); },
   'test-notif'() { testNotification(); toast('Wysłano testowe powiadomienie'); },
