@@ -269,8 +269,16 @@ function homeWidget(w, family, m, wx, stale, param) {
 const dres = await cached(DATA_URL, CACHE, 0, (v) => !!v.days);
 const data = dres.v;
 let wx = null;
-if (data && data.geo && data.geo.lat != null) {
-  const wres = await cached(wxUrl(data.geo), WXCACHE, 15 * 60000, (v) => !!v.current);
+let geo = data && data.geo && data.geo.lat != null ? data.geo : null;
+// Aktualna lokalizacja telefonu (Scriptable pyta o zgodę raz); gdy się nie uda, bierzemy miasto z aplikacji.
+try {
+  Location.setAccuracyToThreeKilometers();
+  const l = await Promise.race([Location.current(), new Promise((_, rej) => Timer.schedule(4000, false, () => rej(new Error('t'))))]);
+  if (l && Number.isFinite(l.latitude)) geo = { n: geo ? geo.n : '', lat: l.latitude, lon: l.longitude };
+} catch (e) { /* bez lokalizacji */ }
+if (geo) {
+  const wcache = WXCACHE.replace('.json', `-${(+geo.lat).toFixed(1)}_${(+geo.lon).toFixed(1)}.json`);
+  const wres = await cached(wxUrl(geo), wcache, 15 * 60000, (v) => !!v.current);
   wx = wxModel(wres.v, new Date());
 }
 const m = model(data);

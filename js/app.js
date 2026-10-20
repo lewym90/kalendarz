@@ -8,6 +8,7 @@ import { instancesInRange } from './recur.js';
 import { nav, saveNav, setRender, rerender, toast, showBanner, confirmSheet, closeTopSheet, sheetOpen, openSheet, closeSheet } from './ui.js';
 import { renderToday, renderCal, renderTasks, renderHub, paintWeather, bindGridDrag, bindMonthDrag, bindTray, dragState, instOf, skyPhase } from './screens.js';
 import { openQuickAdd, openEventEditor, openTaskEditor, openRuleEditor, openCatEditor, openSearch, openCitySheet, defaultDraftFor } from './editors.js';
+import { updateLocation } from './geo.js';
 import { fetchPeers, onPeers, clearPeers, peersOn } from './peers.js';
 import { widgetLoaderScript, pushConfig, pushConnect, pushDisconnect, pushTest, pushSync, initPush, pushSupported, schedulePushSync } from './push.js';
 import { isStandalone } from './notify.js';
@@ -116,6 +117,12 @@ function extraInsights(w) {
   const r = rainInsight(w);
   if (!box || !r || box.querySelector('[data-rain]')) return;
   box.insertAdjacentHTML('beforeend', `<div class="insight" data-rain><span class="ico">${ICON.rain}</span><span>${esc(r)}</span></div>`);
+}
+
+async function locAndWeather(force = false) {
+  const changed = await updateLocation();
+  if (changed) { weather = null; render(); }
+  return refreshWeather(force || changed);
 }
 
 async function refreshWeather(force = false) {
@@ -430,7 +437,7 @@ document.addEventListener('visibilitychange', () => {
   everyTick();
   lastPaint = 0;
   softRefresh();
-  refreshWeather();
+  locAndWeather();
   fetchPeers();
 });
 
@@ -449,7 +456,8 @@ function openPeerSheet(inst) {
 }
 onPeers(() => { render(); schedulePushSync(); });
 let lastView = peersOn();
-onChange(() => { const v = peersOn(); if (v && !lastView) fetchPeers(); lastView = v; });
+let lastAuto = state.settings.autoLoc;
+onChange(() => { const v = peersOn(); if (v && !lastView) fetchPeers(); lastView = v; if (state.settings.autoLoc && !lastAuto) locAndWeather(true); lastAuto = state.settings.autoLoc; });
 setInterval(() => { if (document.visibilityState === 'visible') fetchPeers(); }, 5 * 60000);
 setTimeout(() => fetchPeers(), 1500);
 onChange(() => { lastPaint = Date.now(); render(); updateBadge(); });
@@ -465,7 +473,7 @@ rolloverTasks();
 render();
 updateBadge();
 handleLaunchParams();
-refreshWeather();
+locAndWeather();
 setInterval(everyTick, 15000);
 setInterval(softRefresh, 30000);
 setTimeout(everyTick, 800);

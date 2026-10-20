@@ -712,6 +712,7 @@ export function openCitySheet(onPick) {
     if (!b) return;
     const c = $('#w-res', el)._list[+b.dataset.i];
     state.settings.city = { name: c.name.split(',')[0], lat: c.lat, lon: c.lon };
+    state.settings.autoLoc = false;
     save();
     closeSheet(h);
     onPick?.();

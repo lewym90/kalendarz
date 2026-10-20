@@ -41,6 +41,7 @@ const DEFAULT_SETTINGS = {
   skin: 'dusk',
   accentCustom: '',
   welcomed: false,
+  autoLoc: true,
   share: { on: true, view: false, name: '', color: '#34d3ff' },
 };
 
