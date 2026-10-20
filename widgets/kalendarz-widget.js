@@ -217,7 +217,10 @@ function homeWidget(w, family, m, wx, stale, param) {
     colSp(body, 10, CH);
     const RW = W - pl - pr - LW - 16.5;
     const rc = body.addStack(); rc.layoutVertically(); rc.size = new Size(RW, CH); rc.spacing = 3;
-    txt(rc, `${DAYS3[now.getDay()].replace('.', '')} ${now.getDate()} ${MONTHS[now.getMonth()]}`.replace(/^./, (c) => c.toUpperCase()), 12.5, 'b', WHITE());
+    const hd = rc.addStack(); hd.centerAlignContent(); hd.size = new Size(RW, 16);
+    txt(hd, `${DAYS3[now.getDay()].replace('.', '')} ${now.getDate()} ${MONTHS[now.getMonth()]}`.replace(/^./, (c) => c.toUpperCase()), 12.5, 'b', WHITE());
+    hd.addSpacer();
+    if (syncGen) { const old = now.getTime() - syncGen > 3 * 3600000; txt(hd, `↻ ${pad(new Date(syncGen).getHours())}:${pad(new Date(syncGen).getMinutes())}`, 8.5, 'm', old ? C(ACCENT) : FAINT()); }
     weatherRow(rc, wx, { icon: 22, temp: 25, size: 10.5 });
     const hr = rc.addStack(); hr.size = new Size(RW, 0.5); hr.backgroundColor = C('#ffffff', 0.16);
     plan(rc, m, 4, { size: 12, h: 20, tw: 33, w: RW });
@@ -264,11 +267,12 @@ if (data && data.geo && data.geo.lat != null) {
   wx = wxModel(wres.v, new Date());
 }
 const m = model(data);
+const syncGen = data && data.gen ? +data.gen : 0;
 const family = config.widgetFamily || 'medium';
 const param = String(args.widgetParameter || '').toLowerCase();
 const w = new ListWidget();
 w.url = APP_URL;
-w.refreshAfterDate = new Date(Date.now() + 10 * 60000);
+w.refreshAfterDate = new Date(Date.now() + 5 * 60000);
 if (!data) w.addText('Kalendarz: brak danych. Otwórz aplikację i połącz powiadomienia z serwerem.');
 else if (family.startsWith('accessory')) lockWidget(w, family, m, wx, dres.stale);
 else homeWidget(w, family, m, wx, dres.stale, param);

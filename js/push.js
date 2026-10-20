@@ -21,7 +21,13 @@ const b64ToBytes = (s) => {
 const newId = () => { const a = new Uint8Array(18); crypto.getRandomValues(a); return btoa(String.fromCharCode(...a)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, ''); };
 
 async function api(cfg, path, body, method = 'POST') {
-  const r = await fetch(`${cfg.url}${path}`, { method, headers: { 'Content-Type': 'application/json', ...(cfg.token ? { Authorization: `Bearer ${cfg.token}` } : {}) }, body: method === 'POST' ? JSON.stringify(body || {}) : undefined, keepalive: method === 'POST' && path === '/sync' }).catch(() => { throw new Error('Nie mogę połączyć się z serwerem. Sprawdź adres i internet.'); });
+  // /sync idzie jako „prosty” request (text/plain, token w treści): bez zapytania wstępnego (preflight),
+  // dzięki czemu iOS zdąża go wysłać nawet przy zamykaniu aplikacji.
+  const simple = method === 'POST' && path === '/sync';
+  const init = simple
+    ? { method, headers: { 'Content-Type': 'text/plain' }, body: JSON.stringify({ ...(body || {}), token: cfg.token }), keepalive: true }
+    : { method, headers: { 'Content-Type': 'application/json', ...(cfg.token ? { Authorization: `Bearer ${cfg.token}` } : {}) }, body: method === 'POST' ? JSON.stringify(body || {}) : undefined };
+  const r = await fetch(`${cfg.url}${path}`, init).catch(() => { throw new Error('Nie mogę połączyć się z serwerem. Sprawdź adres i internet.'); });
   const j = await r.json().catch(() => ({}));
   if (!r.ok) throw Object.assign(new Error(j.error || `Błąd ${r.status}`), { status: r.status });
   return j;
@@ -129,6 +135,8 @@ export function sharePayload(now = new Date()) {
 }
 
 let lastSig = '';
+let retries = 0;
+let retryT = 0;
 export async function pushSync(force = false) {
   const cfg = read();
   if (!cfg || !cfg.token) return false;
@@ -139,14 +147,14 @@ export async function pushSync(force = false) {
   if (!force && sig === lastSig) return true;
   try {
     const res = await api(cfg, '/sync', { deviceId: cfg.deviceId, alarms, agenda, share });
-    lastSig = sig;
+    lastSig = sig; retries = 0;
     if (res.widget) cfg.widget = res.widget;
     cfg.syncedAt = Date.now(); cfg.error = '';
     write(cfg);
     return true;
   } catch (e) {
     cfg.error = e.message || 'Błąd'; write(cfg);
-    if (e.status === 401) { /* serwer nas nie zna – użytkownik musi połączyć ponownie */ }
+    if (e.status !== 401 && retries < 6) { retries++; clearTimeout(retryT); retryT = setTimeout(() => pushSync(true), Math.min(120000, 5000 * 2 ** retries)); }
     return false;
   }
 }
@@ -158,7 +166,7 @@ export async function pushTest() {
 }
 
 let timer = null;
-export function schedulePushSync(ms = 800) {
+export function schedulePushSync(ms = 300) {
   if (!read()) return;
   clearTimeout(timer);
   timer = setTimeout(() => pushSync(), ms);

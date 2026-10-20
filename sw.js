@@ -1,5 +1,5 @@
 // Service worker: działanie offline, powiadomienia, obsługa kliknięć i (opcjonalnie) push z serwera.
-const VERSION = 'kalendarz-v17';
+const VERSION = 'kalendarz-v18';
 const SHELL = [
   './', 'index.html', 'manifest.webmanifest', 'css/app.css',
   'js/app.js', 'js/util.js', 'js/store.js', 'js/recur.js', 'js/nlp.js', 'js/notify.js', 'js/weather.js', 'js/ui.js', 'js/editors.js', 'js/screens.js', 'js/extras.js', 'js/data/imieniny.js', 'js/ics.js', 'js/planner.js', 'js/tools.js', 'js/lock.js', 'js/push.js', 'js/peers.js',

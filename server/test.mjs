@@ -53,6 +53,13 @@ await t('agenda i token widgetu', async () => {
   const [, j2] = await call('POST', '/sync', { deviceId: ID, alarms: [] }, token); assert.equal(j2.widget, wt, 'token stały');
   const raw = JSON.parse(fs.readFileSync(process.env.DATA_FILE, 'utf8')); assert.ok(raw.devices[ID].agenda.days[0].items[0].t === 'Dentysta');
 });
+await t('sync z tokenem w treści (bez nagłówka, text/plain) – prosty request bez preflightu', async () => {
+  const r = await fetch(base + '/sync', { method: 'POST', headers: { 'Content-Type': 'text/plain', Origin: 'https://lewym90.github.io' }, body: JSON.stringify({ deviceId: ID, token, alarms: [], agenda: { days: [{ d: new Date().toISOString().slice(0, 10), items: [] }] } }) });
+  assert.equal(r.status, 200); assert.equal(r.headers.get('access-control-allow-origin'), 'https://lewym90.github.io');
+  const r2 = await fetch(base + '/sync', { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: JSON.stringify({ deviceId: ID, token: 'zly', alarms: [] }) });
+  assert.equal(r2.status, 401);
+  const [, w] = await call('GET', `/widget/${wt}`); assert.equal(w.days[0].items.length, 0, 'usunięcie wpisów dociera do widgetu'); assert.ok(w.gen > 0);
+});
 await t('test z serwera', async () => { sent.length = 0; assert.equal((await call('POST', '/test', { deviceId: ID }, token))[0], 200); assert.match(sent[0].payload.title, /Test/); });
 await t('zapis na dysk i odczyt', async () => { const raw = JSON.parse(fs.readFileSync(process.env.DATA_FILE, 'utf8')); assert.ok(raw.devices[ID]); assert.ok(!JSON.stringify(raw).includes(token), 'token tylko jako skrót'); });
 await t('CORS i preflight', async () => { const r = await fetch(base + '/sync', { method: 'OPTIONS', headers: { Origin: 'https://lewym90.github.io' } }); assert.equal(r.status, 204); assert.equal(r.headers.get('access-control-allow-origin'), 'https://lewym90.github.io'); const [, , h] = await call('GET', '/health', null, null, 'https://zly.example'); assert.equal(h.get('access-control-allow-origin'), 'https://lewym90.github.io'); });

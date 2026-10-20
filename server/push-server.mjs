@@ -152,7 +152,7 @@ export async function handle(method, url, headers, body) {
     if (!dev || !dev.agenda) return [404, { error: 'brak danych' }];
     return [200, { ...dev.agenda, now: Date.now() }];
   }
-  const auth = (headers.authorization || '').replace(/^Bearer\s+/i, '');
+  const auth = (headers.authorization || '').replace(/^Bearer\s+/i, '') || (body && typeof body.token === 'string' ? body.token : '');
   if (method === 'POST' && route === '/subscribe') {
     const { deviceId, setup, subscription } = body || {};
     if (!validId(deviceId) || !validSub(subscription)) return [400, { error: 'nieprawidłowe dane' }];
