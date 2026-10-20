@@ -20,10 +20,15 @@ const DIM = () => C('#ffffff', 0.68);
 const FAINT = () => C('#ffffff', 0.42);
 
 async function cached(url, file, maxAgeMs, ok) {
-  try { if (maxAgeMs && fm.fileExists(file)) { const o = JSON.parse(fm.readString(file)); if (Date.now() - o.t < maxAgeMs) return { v: o.v, stale: false }; } } catch (e) { /* */ }
-  try { const v = await new Request(url).loadJSON(); if (v && ok(v)) { fm.writeString(file, JSON.stringify({ t: Date.now(), v })); return { v, stale: false }; } } catch (e) { /* offline */ }
-  try { if (fm.fileExists(file)) return { v: JSON.parse(fm.readString(file)).v, stale: true }; } catch (e) { /* */ }
-  return { v: null, stale: true };
+  try { if (maxAgeMs && fm.fileExists(file)) { const o = JSON.parse(fm.readString(file)); if (Date.now() - o.t < maxAgeMs) return { v: o.v, stale: false, fail: '' }; } } catch (e) { /* */ }
+  let fail = '';
+  try {
+    const rq = new Request(url); const v = await rq.loadJSON();
+    if (v && ok(v)) { fm.writeString(file, JSON.stringify({ t: Date.now(), v })); return { v, stale: false, fail: '' }; }
+    fail = String((rq.response && rq.response.statusCode) || 'dane');
+  } catch (e) { fail = 'sieć'; }
+  try { if (fm.fileExists(file)) return { v: JSON.parse(fm.readString(file)).v, stale: true, fail }; } catch (e) { /* */ }
+  return { v: null, stale: true, fail };
 }
 
 // ---------- Pogoda (Open-Meteo, bez klucza) ----------
@@ -220,7 +225,8 @@ function homeWidget(w, family, m, wx, stale, param) {
     const hd = rc.addStack(); hd.centerAlignContent(); hd.size = new Size(RW, 16);
     txt(hd, `${DAYS3[now.getDay()].replace('.', '')} ${now.getDate()} ${MONTHS[now.getMonth()]}`.replace(/^./, (c) => c.toUpperCase()), 12.5, 'b', WHITE());
     hd.addSpacer();
-    if (syncGen) { const old = now.getTime() - syncGen > 3 * 3600000; txt(hd, `↻ ${pad(new Date(syncGen).getHours())}:${pad(new Date(syncGen).getMinutes())}`, 8.5, 'm', old ? C(ACCENT) : FAINT()); }
+    if (dres.stale) txt(hd, `⚠ ${dres.fail || 'offline'}`, 8.5, 'b', C(ACCENT));
+    else if (syncGen) { const old = now.getTime() - syncGen > 3 * 3600000; txt(hd, `↻ ${pad(new Date(syncGen).getHours())}:${pad(new Date(syncGen).getMinutes())}`, 8.5, 'm', old ? C(ACCENT) : FAINT()); }
     weatherRow(rc, wx, { icon: 22, temp: 25, size: 10.5 });
     const hr = rc.addStack(); hr.size = new Size(RW, 0.5); hr.backgroundColor = C('#ffffff', 0.16);
     plan(rc, m, 4, { size: 12, h: 20, tw: 33, w: RW });

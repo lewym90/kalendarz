@@ -46,12 +46,33 @@ export async function pushConnect(url, code) {
   let sub = await reg.pushManager.getSubscription();
   if (sub) { try { await sub.unsubscribe(); } catch (_) { /* nic */ } }
   sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToBytes(publicKey) });
-  const cfg = { url, deviceId: newId(), token: '', at: Date.now() };
-  const res = await api(cfg, '/subscribe', { deviceId: cfg.deviceId, setup: String(code || '').trim(), subscription: sub.toJSON() });
-  cfg.token = res.token;
+  // Ponowne połączenie używa tego samego identyfikatora i tajnego adresu widgetu, więc skryptu w Scriptable nie trzeba wklejać od nowa.
+  const prev = read();
+  const attempt = async (reuse) => {
+    const cfg = { url, deviceId: reuse && prev && prev.deviceId ? prev.deviceId : newId(), token: reuse && prev ? prev.token || '' : '', code: String(code || '').trim(), widget: reuse && prev ? prev.widget : '', at: Date.now() };
+    const res = await api(cfg, '/subscribe', { deviceId: cfg.deviceId, setup: cfg.code, wtoken: cfg.widget || undefined, subscription: sub.toJSON() });
+    if (res.token) cfg.token = res.token;
+    return cfg;
+  };
+  let cfg;
+  try { cfg = await attempt(true); } catch (e) { if (e.status === 401 && /uprawnie/.test(e.message)) cfg = await attempt(false); else throw e; }
   write(cfg);
   await pushSync(true);
   return cfg;
+}
+
+// Serwer nie zna już tego telefonu (np. wygasła subskrypcja): spróbuj zarejestrować się ponownie zapamiętanym kodem.
+async function rejoin(cfg) {
+  if (!cfg.code || !pushSupported()) return false;
+  try {
+    const reg = await navigator.serviceWorker.ready;
+    const sub = await reg.pushManager.getSubscription();
+    if (!sub) return false;
+    const res = await api({ url: cfg.url }, '/subscribe', { deviceId: cfg.deviceId, setup: cfg.code, wtoken: cfg.widget || undefined, subscription: sub.toJSON() });
+    if (!res.token) return false;
+    cfg.token = res.token; write(cfg);
+    return true;
+  } catch (_) { return false; }
 }
 
 export async function pushDisconnect() {
@@ -136,6 +157,7 @@ export function sharePayload(now = new Date()) {
 
 let lastSig = '';
 let retries = 0;
+let rejoined = false;
 let retryT = 0;
 export async function pushSync(force = false) {
   const cfg = read();
@@ -153,7 +175,13 @@ export async function pushSync(force = false) {
     write(cfg);
     return true;
   } catch (e) {
-    cfg.error = e.message || 'Błąd'; write(cfg);
+    if (e.status === 401 && !rejoined) {
+      rejoined = true;
+      const ok = await rejoin(cfg);
+      rejoined = false;
+      if (ok) return pushSync(true);
+    }
+    cfg.error = e.status === 401 ? 'Serwer nie rozpoznaje tego telefonu. Dotknij „Połącz ponownie”.' : (e.message || 'Błąd'); write(cfg);
     if (e.status !== 401 && retries < 6) { retries++; clearTimeout(retryT); retryT = setTimeout(() => pushSync(true), Math.min(120000, 5000 * 2 ** retries)); }
     return false;
   }

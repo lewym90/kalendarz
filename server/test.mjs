@@ -60,6 +60,17 @@ await t('sync z tokenem w treści (bez nagłówka, text/plain) – prosty reques
   assert.equal(r2.status, 401);
   const [, w] = await call('GET', `/widget/${wt}`); assert.equal(w.days[0].items.length, 0, 'usunięcie wpisów dociera do widgetu'); assert.ok(w.gen > 0);
 });
+await t('ponowne połączenie zachowuje token widgetu', async () => {
+  const D = 'rejoin_0123456789abcdef', WT = 'wtoken_0123456789abcdefghij';
+  const [c, j] = await call('POST', '/subscribe', { deviceId: D, setup: 'KOD123', wtoken: WT, subscription: sub }); assert.equal(c, 200);
+  const [, s2] = await call('POST', '/sync', { deviceId: D, alarms: [], agenda: { days: [{ d: new Date().toISOString().slice(0, 10), items: [] }] } }, j.token);
+  assert.equal(s2.widget, WT, 'ten sam adres widgetu po ponownym połączeniu');
+  assert.equal((await call('GET', `/widget/${WT}`))[0], 200);
+  await call('POST', '/unsubscribe', { deviceId: D }, j.token);
+  const [c3, j3] = await call('POST', '/subscribe', { deviceId: 'inny_0123456789abcdef', setup: 'KOD123', wtoken: 'krotki', subscription: sub }); assert.equal(c3, 200);
+  const [, s3] = await call('POST', '/sync', { deviceId: 'inny_0123456789abcdef', alarms: [] }, j3.token); assert.notEqual(s3.widget, 'krotki');
+  await call('POST', '/unsubscribe', { deviceId: 'inny_0123456789abcdef' }, j3.token);
+});
 await t('test z serwera', async () => { sent.length = 0; assert.equal((await call('POST', '/test', { deviceId: ID }, token))[0], 200); assert.match(sent[0].payload.title, /Test/); });
 await t('zapis na dysk i odczyt', async () => { const raw = JSON.parse(fs.readFileSync(process.env.DATA_FILE, 'utf8')); assert.ok(raw.devices[ID]); assert.ok(!JSON.stringify(raw).includes(token), 'token tylko jako skrót'); });
 await t('CORS i preflight', async () => { const r = await fetch(base + '/sync', { method: 'OPTIONS', headers: { Origin: 'https://lewym90.github.io' } }); assert.equal(r.status, 204); assert.equal(r.headers.get('access-control-allow-origin'), 'https://lewym90.github.io'); const [, , h] = await call('GET', '/health', null, null, 'https://zly.example'); assert.equal(h.get('access-control-allow-origin'), 'https://lewym90.github.io'); });

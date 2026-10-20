@@ -259,6 +259,7 @@ const actions = {
       <p class="note" id="pc-err" style="color:#e5484d" hidden></p>
       <button type="button" class="btn primary" id="pc-go" style="width:100%;margin-top:10px">Połącz</button></div>`);
     const q = (x) => h.el.querySelector(x);
+    q('#pc-url').value = pushConfig()?.url || '';
     q('[data-x=close]').onclick = () => closeSheet(h);
     q('#pc-go').onclick = async () => {
       const b = q('#pc-go'); b.disabled = true; b.textContent = 'Łączę…'; q('#pc-err').hidden = true;
@@ -434,6 +435,7 @@ document.addEventListener('visibilitychange', () => {
 });
 
 initPush();
+if (pushConfig()?.error && /rozpoznaje/.test(pushConfig().error)) setTimeout(() => toast('Serwer nie zna tego telefonu. Centrum, Połącz ponownie.', { ms: 7000 }), 2000);
 function openPeerSheet(inst) {
   const p = inst.ev.peer;
   const when = inst.allDay ? `${fmtDayLong(inst.start)}, cały dzień` : `${fmtDayLong(inst.start)}, ${fmtTime(inst.start)}–${fmtTime(inst.end)}`;

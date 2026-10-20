@@ -165,7 +165,11 @@ export async function handle(method, url, headers, body) {
     if (!cfg.setupCode || typeof setup !== 'string' || !safeEq(setup, cfg.setupCode)) return [401, { error: 'zły kod połączenia' }];
     if (Object.keys(db.devices).length >= cfg.maxDevices) return [403, { error: 'za dużo urządzeń' }];
     const token = crypto.randomBytes(24).toString('base64url');
-    db.devices[deviceId] = { tokenHash: sha(token), sub: subscription, alarms: [], sent: {}, created: Date.now() };
+    const dev0 = { tokenHash: sha(token), sub: subscription, alarms: [], sent: {}, created: Date.now() };
+    // Ponowne połączenie tego samego telefonu: zachowaj dotychczasowy tajny adres widgetu (żeby nie wklejać skryptu od nowa).
+    const wt = body.wtoken;
+    if (typeof wt === 'string' && /^[A-Za-z0-9_-]{20,64}$/.test(wt) && !Object.values(db.devices).some((x) => x.wtoken === wt)) dev0.wtoken = wt;
+    db.devices[deviceId] = dev0;
     touch(); saveDb();
     return [200, { ok: true, token }];
   }
