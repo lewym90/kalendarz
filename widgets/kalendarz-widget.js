@@ -225,8 +225,9 @@ function homeWidget(w, family, m, wx, stale, param) {
     const hd = rc.addStack(); hd.centerAlignContent(); hd.size = new Size(RW, 16);
     txt(hd, `${DAYS3[now.getDay()].replace('.', '')} ${now.getDate()} ${MONTHS[now.getMonth()]}`.replace(/^./, (c) => c.toUpperCase()), 12.5, 'b', WHITE());
     hd.addSpacer();
+    // Znacznik widać tylko, gdy coś jest nie tak: brak połączenia albo dane starsze niż 3 godziny.
     if (dres.stale) txt(hd, `⚠ ${dres.fail || 'offline'}`, 8.5, 'b', C(ACCENT));
-    else if (syncGen) { const old = now.getTime() - syncGen > 3 * 3600000; txt(hd, `↻ ${pad(new Date(syncGen).getHours())}:${pad(new Date(syncGen).getMinutes())}`, 8.5, 'm', old ? C(ACCENT) : FAINT()); }
+    else if (syncGen && now.getTime() - syncGen > 3 * 3600000) txt(hd, `⚠ ${pad(new Date(syncGen).getHours())}:${pad(new Date(syncGen).getMinutes())}`, 8.5, 'b', C(ACCENT));
     weatherRow(rc, wx, { icon: 22, temp: 25, size: 10.5 });
     const hr = rc.addStack(); hr.size = new Size(RW, 0.5); hr.backgroundColor = C('#ffffff', 0.16);
     plan(rc, m, 4, { size: 12, h: 20, tw: 33, w: RW });
