@@ -310,7 +310,8 @@ export function openQuickAdd({ text = '', mode = 'event', ctxDate = null } = {})
     } catch (e) {
       setListening(false);
       recSession = null;
-      kbFallback('Nie udało się uruchomić rozpoznawania (potrzebny internet przy pierwszym użyciu). Użyj mikrofonu klawiatury.');
+      const why = String((e && (e.message || e.name)) || e).slice(0, 160);
+      kbFallback(`Nie udało się rozpoznać mowy (${why}). Możesz użyć mikrofonu klawiatury.`);
     }
   };
   const startSR = () => {
