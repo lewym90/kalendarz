@@ -1,4 +1,5 @@
 // Arkusze: szybkie dodawanie, edytor wydarzenia i zadania, reguły, kategorie, szukanie, miasto.
+import { record, transcribe, loadModel, modelReady, canRecord } from './voice.js';
 import {
   $, $$, esc, ymd, parseYmd, parseDT, fmtDT, fmtTime, pad, addDays, addMinutes, startOfDay, relDay, fmtDayLong, fmtDayMid, fmtDuration, fmtReminder, ICON, haptic, uid, debounce, DAYS_LETTER, MONTHS_GEN, DAYS_SHORT,
 } from './util.js';
@@ -158,12 +159,14 @@ export function openQuickAdd({ text = '', mode = 'event', ctxDate = null } = {})
   };
 
 
-  // --- Głos: Web Speech, a gdy iOS go nie uruchomi — dyktowanie z klawiatury
+  // --- Głos: nagranie + rozpoznawanie w aplikacji (Whisper); Web Speech tylko w zwykłej przeglądarce
   const micBtn = $('#qa-mic', el);
   const micHint = $('#qa-mic-hint', el);
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  const standalone = window.navigator.standalone === true || window.matchMedia('(display-mode: standalone)').matches;
   let rec = null;
   let listening = false;
+  let recSession = null;
   const hint = (msg) => { micHint.hidden = !msg; micHint.textContent = msg || ''; };
   const setListening = (on) => { listening = on; micBtn.classList.toggle('on', on); micBtn.setAttribute('aria-pressed', on ? 'true' : 'false'); };
   const kbFallback = (why) => {
@@ -171,12 +174,54 @@ export function openQuickAdd({ text = '', mode = 'event', ctxDate = null } = {})
     hint(why || 'Dotknij mikrofonu na klawiaturze iPhone’a i mów — zdanie pojawi się samo.');
     input.focus();
   };
-  const stopMic = () => { try { rec && rec.abort(); } catch { /* */ } rec = null; setListening(false); };
-  const startMic = () => {
-    const bad = (() => { try { return localStorage.getItem('kalendarz.micFail') === '1'; } catch { return false; } })();
-    if (!SR || bad) return kbFallback();
-    haptic();
+  const putText = (t) => {
     const base = input.value.trim();
+    input.value = (base ? base + ' ' : '') + t;
+    run();
+  };
+  const startWhisper = async () => {
+    haptic();
+    const first = !modelReady();
+    let pct = 0;
+    let phase = 'listen';
+    const status = () => {
+      if (phase === 'listen') hint(first ? `Słucham… (jednorazowo pobieram model głosu: ${pct}%)` : 'Słucham… powiedz zdanie.');
+      else if (phase === 'think') hint(pct < 100 && first ? `Pobieram model głosu: ${pct}% (jednorazowo, potem działa offline)` : 'Rozpoznaję…');
+    };
+    let ready;
+    try {
+      recSession = await record({ onLevel: (l) => micBtn.style.setProperty('--lvl', Math.min(1, l * 3).toFixed(2)) });
+    } catch (e) {
+      recSession = null;
+      return kbFallback(e && e.name === 'NotAllowedError' ? 'Brak zgody na mikrofon. Zezwól w Ustawieniach iPhone’a albo użyj mikrofonu klawiatury.' : undefined);
+    }
+    setListening(true);
+    status();
+    ready = loadModel((v) => { pct = v; status(); });
+    ready.catch(() => {});
+    input.blur();
+    const sess = recSession;
+    try {
+      const { pcm, heard } = await sess.done;
+      setListening(false);
+      micBtn.style.removeProperty('--lvl');
+      recSession = null;
+      if (!heard) { hint('Nic nie usłyszałem — dotknij mikrofonu i spróbuj jeszcze raz.'); return; }
+      phase = 'think';
+      pct = first ? pct : 100;
+      status();
+      const text = await transcribe(pcm);
+      if (!text) { hint('Nie udało się rozpoznać mowy — spróbuj jeszcze raz.'); return; }
+      putText(text);
+      hint('Sprawdź podgląd i dotknij „Dodaj”.');
+    } catch (e) {
+      setListening(false);
+      recSession = null;
+      kbFallback('Nie udało się uruchomić rozpoznawania (potrzebny internet przy pierwszym użyciu). Użyj mikrofonu klawiatury.');
+    }
+  };
+  const startSR = () => {
+    haptic();
     let started = false;
     let got = false;
     try {
@@ -184,14 +229,9 @@ export function openQuickAdd({ text = '', mode = 'event', ctxDate = null } = {})
       rec.lang = 'pl-PL';
       rec.interimResults = true;
       rec.continuous = false;
-      rec.maxAlternatives = 1;
-    } catch { return kbFallback(); }
-    const timer = setTimeout(() => {
-      if (started) return;
-      try { localStorage.setItem('kalendarz.micFail', '1'); } catch { /* */ }
-      stopMic();
-      kbFallback('Ten telefon nie pozwala na nasłuch w aplikacji. Użyj mikrofonu na klawiaturze — zawsze zadziała.');
-    }, 3000);
+    } catch { return startWhisper(); }
+    const base = input.value.trim();
+    const timer = setTimeout(() => { if (!started) { try { rec.abort(); } catch { /* */ } rec = null; startWhisper(); } }, 2500);
     rec.onstart = () => { started = true; clearTimeout(timer); setListening(true); hint('Słucham… powiedz zdanie.'); input.blur(); };
     rec.onresult = (e) => {
       let t = '';
@@ -200,18 +240,18 @@ export function openQuickAdd({ text = '', mode = 'event', ctxDate = null } = {})
       input.value = (base ? base + ' ' : '') + t.trim();
       run();
     };
-    rec.onerror = (e) => {
-      clearTimeout(timer);
-      if (e.error === 'no-speech' || e.error === 'aborted') { hint('Nic nie usłyszałem — spróbuj jeszcze raz.'); return; }
-      if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
-        try { localStorage.setItem('kalendarz.micFail', '1'); } catch { /* */ }
-        kbFallback('Brak zgody na mikrofon w aplikacji. Użyj mikrofonu na klawiaturze iPhone’a.');
-      } else kbFallback();
-    };
-    rec.onend = () => { clearTimeout(timer); setListening(false); if (got) hint('Sprawdź podgląd i dotknij „Dodaj”.'); else if (started && micHint.textContent.startsWith('Słucham')) hint('Nic nie usłyszałem — spróbuj jeszcze raz.'); rec = null; };
-    try { rec.start(); } catch { clearTimeout(timer); kbFallback(); }
+    rec.onerror = (e) => { clearTimeout(timer); if (started) { setListening(false); hint('Nic nie usłyszałem — spróbuj jeszcze raz.'); } else if (e.error !== 'aborted') { rec = null; startWhisper(); } };
+    rec.onend = () => { clearTimeout(timer); if (started) { setListening(false); hint(got ? 'Sprawdź podgląd i dotknij „Dodaj”.' : 'Nic nie usłyszałem — spróbuj jeszcze raz.'); } rec = null; };
+    try { rec.start(); } catch { clearTimeout(timer); startWhisper(); }
   };
-  micBtn.addEventListener('click', () => { if (listening) { try { rec && rec.stop(); } catch { /* */ } } else startMic(); });
+  micBtn.addEventListener('click', () => {
+    if (recSession) { recSession.stop(); return; }
+    if (listening && rec) { try { rec.stop(); } catch { /* */ } return; }
+    if (SR && !standalone) startSR();
+    else if (canRecord()) startWhisper();
+    else kbFallback();
+  });
+  if (canRecord() && modelReady() && !(SR && !standalone)) setTimeout(() => loadModel().catch(() => {}), 600);
   input.addEventListener('input', () => hint(''));
   input.addEventListener('input', run);
   $('#qa-form', el).addEventListener('submit', (e) => { e.preventDefault(); submit(); });
