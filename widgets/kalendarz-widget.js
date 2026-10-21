@@ -126,7 +126,7 @@ function planRow(p, i, now, o) {
   const bar = r.addStack(); bar.size = new Size(3, o.h - 4); bar.cornerRadius = 1.5; bar.backgroundColor = i.isNow ? C(ACCENT) : (i.c ? C(i.c) : C('#ffffff', 0.5));
   const tm = r.addStack(); tm.size = new Size(o.tw, 0);
   txt(tm, i.isNow ? 'teraz' : (i.label || i.s || (i.k === 't' ? 'zadanie' : '')), o.size - 1, 'b', i.isNow ? C(ACCENT) : DIM());
-  if (i.w) { const b = r.addStack(); b.size = new Size(12, 12); b.cornerRadius = 6; b.backgroundColor = C(i.c || '#34d3ff'); b.centerAlignContent(); centered(b, (q) => txt(q, i.w, 8, 'h', WHITE())); }
+  if (i.w) { const b = r.addStack(); b.size = new Size(15, 15); b.cornerRadius = 7.5; b.backgroundColor = C(i.c || '#34d3ff'); b.centerAlignContent(); const lt = b.addText(String(i.w)); lt.font = Font.heavySystemFont(10); lt.textColor = WHITE(); lt.lineLimit = 1; lt.centerAlignText(); }
   txt(r, (i.k === 't' ? '☐ ' : '') + i.t, o.size, 'm', WHITE());
   return r;
 }
@@ -225,9 +225,9 @@ function homeWidget(w, family, m, wx, stale, param) {
     const hd = rc.addStack(); hd.centerAlignContent(); hd.size = new Size(RW, 16);
     txt(hd, `${DAYS3[now.getDay()].replace('.', '')} ${now.getDate()} ${MONTHS[now.getMonth()]}`.replace(/^./, (c) => c.toUpperCase()), 12.5, 'b', WHITE());
     hd.addSpacer();
-    // Znacznik widać tylko, gdy coś jest nie tak: brak połączenia albo dane starsze niż 3 godziny.
+    // Znacznik widać tylko, gdy coś jest nie tak: brak połączenia z serwerem albo dane starsze niż 6 dni (plan jest wysyłany na 7 dni do przodu).
     if (dres.stale) txt(hd, `⚠ ${dres.fail || 'offline'}`, 8.5, 'b', C(ACCENT));
-    else if (syncGen && now.getTime() - syncGen > 3 * 3600000) txt(hd, `⚠ ${pad(new Date(syncGen).getHours())}:${pad(new Date(syncGen).getMinutes())}`, 8.5, 'b', C(ACCENT));
+    else if (syncGen && now.getTime() - syncGen > 6 * 86400000) txt(hd, '⚠ stare dane', 8.5, 'b', C(ACCENT));
     weatherRow(rc, wx, { icon: 22, temp: 25, size: 10.5 });
     const hr = rc.addStack(); hr.size = new Size(RW, 0.5); hr.backgroundColor = C('#ffffff', 0.16);
     plan(rc, m, 4, { size: 12, h: 20, tw: 33, w: RW });
