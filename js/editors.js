@@ -34,6 +34,7 @@ const examples = [
 // ---------- Szybkie dodawanie ----------
 export function openQuickAdd({ text = '', mode = 'event', ctxDate = null } = {}) {
   let kind = mode;
+  let forced = mode === 'task' ? 'task' : null;
   let parsed = null;
   let parsedAll = [];
   let exIdx = Math.floor(Math.random() * examples.length);
@@ -48,9 +49,11 @@ export function openQuickAdd({ text = '', mode = 'event', ctxDate = null } = {})
         <div class="seg" role="tablist"><button type="button" data-k="event" class="${kind === 'event' ? 'on' : ''}">Wydarzenie</button><button type="button" data-k="task" class="${kind === 'task' ? 'on' : ''}">Zadanie</button></div>
         <button type="button" class="link" data-d="more">Więcej opcji</button>
       </div>
-      <form id="qa-form" autocomplete="off">
+      <form id="qa-form" autocomplete="off" class="qa-wrap">
         <input id="qa" class="qa-input" type="text" enterkeyhint="done" autocapitalize="sentences" autocomplete="off" placeholder="${esc(examples[exIdx])}" value="${esc(text)}" aria-label="Opisz wydarzenie zdaniem">
+        <button type="button" class="qa-mic" id="qa-mic" aria-label="Dyktuj głosem">${ICON.mic}</button>
       </form>
+      <div class="mic-hint" id="qa-mic-hint" hidden></div>
       <div class="preview" id="qa-prev"></div>
       <div class="lbl">Ostatnio dodawane</div>
       <div class="chips scroll" id="qa-sug">${sug.map((s) => `<button type="button" class="chip" data-s="${esc(s)}">${esc(s)}</button>`).join('')}</div>
@@ -63,11 +66,11 @@ export function openQuickAdd({ text = '', mode = 'event', ctxDate = null } = {})
   const addBtn = $('#qa-add', el);
 
   const run = () => {
-    const all = parseMulti(input.value, { now: new Date(), cats: state.cats, mode: kind, history: state.history });
+    const all = parseMulti(input.value, { now: new Date(), cats: state.cats, mode: forced || 'event', force: !!forced, history: state.history });
     const p = all[0];
     for (const q of all) fixCtx(q);
     parsedAll = all;
-    if (p.kind === 'task' && kind !== 'task') { kind = 'task'; syncSeg(); }
+    if (!forced && p.kind !== kind) { kind = p.kind; syncSeg(); }
     parsed = p;
     addBtn.disabled = !all.some((x) => x.title);
     addBtn.textContent = all.length > 1 ? `Dodaj ${all.length}` : 'Dodaj';
@@ -154,13 +157,69 @@ export function openQuickAdd({ text = '', mode = 'event', ctxDate = null } = {})
     rerender();
   };
 
+
+  // --- Głos: Web Speech, a gdy iOS go nie uruchomi — dyktowanie z klawiatury
+  const micBtn = $('#qa-mic', el);
+  const micHint = $('#qa-mic-hint', el);
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  let rec = null;
+  let listening = false;
+  const hint = (msg) => { micHint.hidden = !msg; micHint.textContent = msg || ''; };
+  const setListening = (on) => { listening = on; micBtn.classList.toggle('on', on); micBtn.setAttribute('aria-pressed', on ? 'true' : 'false'); };
+  const kbFallback = (why) => {
+    setListening(false);
+    hint(why || 'Dotknij mikrofonu na klawiaturze iPhone’a i mów — zdanie pojawi się samo.');
+    input.focus();
+  };
+  const stopMic = () => { try { rec && rec.abort(); } catch { /* */ } rec = null; setListening(false); };
+  const startMic = () => {
+    const bad = (() => { try { return localStorage.getItem('kalendarz.micFail') === '1'; } catch { return false; } })();
+    if (!SR || bad) return kbFallback();
+    haptic();
+    const base = input.value.trim();
+    let started = false;
+    let got = false;
+    try {
+      rec = new SR();
+      rec.lang = 'pl-PL';
+      rec.interimResults = true;
+      rec.continuous = false;
+      rec.maxAlternatives = 1;
+    } catch { return kbFallback(); }
+    const timer = setTimeout(() => {
+      if (started) return;
+      try { localStorage.setItem('kalendarz.micFail', '1'); } catch { /* */ }
+      stopMic();
+      kbFallback('Ten telefon nie pozwala na nasłuch w aplikacji. Użyj mikrofonu na klawiaturze — zawsze zadziała.');
+    }, 3000);
+    rec.onstart = () => { started = true; clearTimeout(timer); setListening(true); hint('Słucham… powiedz zdanie.'); input.blur(); };
+    rec.onresult = (e) => {
+      let t = '';
+      for (let i = 0; i < e.results.length; i++) t += e.results[i][0].transcript;
+      got = true;
+      input.value = (base ? base + ' ' : '') + t.trim();
+      run();
+    };
+    rec.onerror = (e) => {
+      clearTimeout(timer);
+      if (e.error === 'no-speech' || e.error === 'aborted') { hint('Nic nie usłyszałem — spróbuj jeszcze raz.'); return; }
+      if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
+        try { localStorage.setItem('kalendarz.micFail', '1'); } catch { /* */ }
+        kbFallback('Brak zgody na mikrofon w aplikacji. Użyj mikrofonu na klawiaturze iPhone’a.');
+      } else kbFallback();
+    };
+    rec.onend = () => { clearTimeout(timer); setListening(false); if (got) hint('Sprawdź podgląd i dotknij „Dodaj”.'); else if (started && micHint.textContent.startsWith('Słucham')) hint('Nic nie usłyszałem — spróbuj jeszcze raz.'); rec = null; };
+    try { rec.start(); } catch { clearTimeout(timer); kbFallback(); }
+  };
+  micBtn.addEventListener('click', () => { if (listening) { try { rec && rec.stop(); } catch { /* */ } } else startMic(); });
+  input.addEventListener('input', () => hint(''));
   input.addEventListener('input', run);
   $('#qa-form', el).addEventListener('submit', (e) => { e.preventDefault(); submit(); });
   addBtn.addEventListener('click', submit);
   el.addEventListener('click', (e) => {
     const t = e.target.closest('button');
     if (!t) return;
-    if (t.dataset.k) { kind = t.dataset.k; syncSeg(); run(); haptic(); }
+    if (t.dataset.k) { kind = t.dataset.k; forced = kind; syncSeg(); run(); haptic(); }
     else if (t.dataset.s) {
       input.value = t.dataset.s;
       run();

@@ -55,3 +55,22 @@ test('przypomnienie i dni robocze', () => {
   assert.deepEqual(P('przegląd auta 12.11 o 10 przypomnij 1 dzień wcześniej').remind, [1440]);
   assert.deepEqual(P('w dni robocze o 8 stand-up').rrule.byday, [1, 2, 3, 4, 5]);
 });
+
+test('głos: polecenie i data słowna', () => {
+  const now = new Date(2026, 9, 21, 8, 30);
+  const l = parseMulti('dodaj do kalendarza wizyta u lekarza trzeciego listopada o 17', { now, cats: DEFAULT_CATS });
+  assert.equal(l.length, 1); assert.equal(l[0].title, 'Wizyta u lekarza'); assert.equal(l[0].date, '2026-11-03'); assert.equal(l[0].time, '17:00');
+});
+test('głos: trzy wydarzenia w jednym zdaniu', () => {
+  const now = new Date(2026, 9, 21, 8, 30);
+  const l = parseMulti('dodaj do kalendarza wizytę u lekarza 3 listopada o 17, wyjazd do rodziców 17 listopada o 12 i dentysta 2 grudnia 15.45', { now, cats: DEFAULT_CATS });
+  assert.deepEqual(l.map((x) => [x.date, x.time]), [['2026-11-03', '17:00'], ['2026-11-17', '12:00'], ['2026-12-02', '15:45']]);
+});
+test('głos: zadania z różnymi dniami', () => {
+  const now = new Date(2026, 9, 21, 8, 30);
+  const a = parseMulti('znajdź dziś opony zimowe, kup mleko', { now, cats: DEFAULT_CATS });
+  assert.deepEqual(a.map((x) => [x.kind, x.date]), [['task', '2026-10-21'], ['task', '2026-10-21']]);
+  const b = parseMulti('kup dziś mleko, jutro znajdź opony zimowe a w przyszły poniedziałek umów się do fryzjera', { now, cats: DEFAULT_CATS });
+  assert.deepEqual(b.map((x) => [x.kind, x.date]), [['task', '2026-10-21'], ['task', '2026-10-22'], ['task', '2026-10-26']]);
+  assert.equal(parseMulti('kup chleb i mleko', { now, cats: DEFAULT_CATS }).length, 1);
+});

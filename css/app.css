@@ -247,6 +247,13 @@ h1, h2, h3, p { margin: 0; }
 .sheet-f .btn { flex: 1; }
 
 /* Szybkie dodawanie */
+.qa-wrap { position: relative; }
+.qa-wrap .qa-input { padding-right: 52px; }
+.qa-mic { position: absolute; right: 0; top: 50%; transform: translateY(-50%); margin-top: -1px; width: 44px; height: 44px; border-radius: 50%; border: 0; background: var(--surface); color: var(--accent, #ff7a4d); display: grid; place-items: center; cursor: pointer; transition: background .2s, transform .2s; }
+.qa-mic svg { width: 22px; height: 22px; }
+.qa-mic.on { background: var(--accent, #ff7a4d); color: #fff; animation: micPulse 1.2s ease-in-out infinite; }
+@keyframes micPulse { 50% { transform: translateY(-50%) scale(1.12); } }
+.mic-hint { margin: 2px 0 6px; font-size: 13.5px; color: var(--text3); line-height: 1.4; }
 .qa-input { width: 100%; background: transparent; border: 0; outline: 0; font-family: var(--font-display); font-size: 25px; font-weight: 600; letter-spacing: -0.02em; line-height: 1.2; padding: 8px 0 10px; }
 .qa-input::placeholder { color: var(--text3); font-weight: 500; }
 .seg { display: inline-flex; padding: 3px; border-radius: 14px; background: var(--surface2); gap: 2px; }

@@ -428,36 +428,104 @@ export function toEventFields(p, now = new Date()) {
 const TIME_CUE = /\b(jutro|pojutrze|dzis|dzisiaj|o\s+\d|na\s+\d|\d{1,2}[:.]\d{2}|\d{1,2}\s*-\s*\d{1,2}|(?:w|we)\s+(?:poniedzialk|wtork|wtorek|sro|czwart|piat|sobot|niedziel)|za\s+(?:\d+|pol|godzine|chwile)|rano|wieczorem|przed poludniem)/;
 const DATE_CUE = /\b(jutro|pojutrze|dzis|dzisiaj|wczoraj|poniedzialk|wtork|wtorek|srod[aey]?|czwartk|czwartek|piatek|piatk|sobot|niedziel|\d{1,2}[./]\d{1,2}|codziennie|co\s|za\s+\d+\s+(?:dni|dzien|tyg)|weekend|przyszl|nastepn)/;
 
+// ---------- Głos: polecenia, liczebniki porządkowe, podział na pozycje ----------
+const ORD_U = { pierwszego: 1, drugiego: 2, trzeciego: 3, czwartego: 4, piatego: 5, szostego: 6, siodmego: 7, osmego: 8, dziewiatego: 9, dziesiatego: 10, jedenastego: 11, dwunastego: 12, trzynastego: 13, czternastego: 14, pietnastego: 15, szesnastego: 16, siedemnastego: 17, osiemnastego: 18, dziewietnastego: 19 };
+const ORD_RE = new RegExp(`\\b(?:(dwudziestego|trzydziestego)(?:\\s+(pierwszego|drugiego|trzeciego|czwartego|piatego|szostego|siodmego|osmego|dziewiatego))?|(${Object.keys(ORD_U).join('|')}))\\s+(?=(?:${MONTHS})\\b)`, 'g');
+
+// „trzeciego listopada" -> „3 listopada" (raw i norm mają tę samą długość, więc tniemy po indeksach)
+function ordinalDates(text) {
+  const n = norm(text);
+  let out = '';
+  let last = 0;
+  let m;
+  ORD_RE.lastIndex = 0;
+  while ((m = ORD_RE.exec(n))) {
+    const v = m[3] ? ORD_U[m[3]] : (m[1] === 'dwudziestego' ? 20 : 30) + (m[2] ? ORD_U[m[2]] : 0);
+    out += text.slice(last, m.index) + v + ' ';
+    last = m.index + m[0].length;
+  }
+  return out + text.slice(last);
+}
+
+const VERBS = 'kup|kupic|znajdz|znalezc|umow|umowic|zadzwon|zadzwonic|zaplac|zaplacic|zalatw|zalatwic|sprawdz|sprawdzic|napisz|napisac|wyslij|wyslac|odbierz|odebrac|zamow|zamowic|zrob|zrobic|przygotuj|przygotowac|oddaj|oddac|wez|wziac|pamietaj|wymien|wymienic|umyj|posprzataj|wynies|zanies|odnies|zarezerwuj|zarezerwowac|anuluj|wydrukuj|ogarnij|skocz|popros|zapytaj|podlej|nakarm|rozlicz|wypelnij|zloz|odnow|odnowic|ustaw|poszukaj|wyszukaj|dokup|przeczytaj|obejrzyj|naladuj|wyprasuj|ugotuj|upiecz|pozmywaj|wysprzataj|dostarcz|podpisz|zglos|odpisz|oddzwon|przelej|wplac|wyplac|odwiedz|zawiez|przywiez|zajrzyj|powiedz|spytaj|zainstaluj|zaktualizuj|zarejestruj|naprawic|napraw';
+const LEAD_CUE = '(?:(?:w|we|na|do|od)\\s+)?(?:(?:przyszly|przyszla|przyszle|nastepny|nastepna|nastepne)\\s+)?(?:jutro|pojutrze|dzis|dzisiaj|rano|wieczorem|poniedzialek|poniedzialku|wtorek|wtorku|sroda|srode|czwartek|czwartku|piatek|piatku|sobota|sobote|niedziela|niedziele|weekend|\\d{1,2}\\s+(?:' + MONTHS + ')|\\d{1,2}[./]\\d{1,2})';
+const VERB_LED = new RegExp(`^\\s*(?:(?:${LEAD_CUE}|o\\s+\\d{1,2}(?:[:.]\\d{2})?|prosze|mi|nie zapomnij|zeby|trzeba|musze)\\s+)*(?:${VERBS})\\b`);
+const CUE = new RegExp(`${TIME_CUE.source}|${DATE_CUE.source}|\\d{1,2}\\s+(?:${MONTHS})\\b`);
+const verbLed = (piece) => VERB_LED.test(norm(piece));
+const DATE_ANY = new RegExp(`${DATE_CUE.source}|\\d{1,2}\\s+(?:${MONTHS})\\b`);
+const hasCue = (piece) => CUE.test(norm(piece));
+
+// „Dodaj do kalendarza …", „zapisz zadanie …", „przypomnij mi …" -> { text, mode }
+export function stripCommand(text) {
+  let t = (text || '').trim();
+  let mode = null;
+  const re = /^\s*(?:prosz[eę]\s+)?(?:dodaj|zapisz|wpisz|dopisz|stw[oó]rz|utw[oó]rz|zaplanuj|ustaw)(?:\s+mi)?\s*(?:(?:do\s+)?(kalendarza|kalendarz|wydarzenie|spotkanie)|(?:do\s+)?(zada[nń]|zadanie|zadania|listy|przypomnienie|przypomnienia|todo))?\s*[:,\-–]?\s*/iu;
+  const m = re.exec(t);
+  if (m && m[0].trim()) {
+    if (m[1]) mode = 'event';
+    else if (m[2]) mode = 'task';
+    t = t.slice(m[0].length);
+  } else {
+    const r2 = /^\s*przypomnij\s+mi\s+(?:[żz]eby\s+|[żz]e\s+|o\s+)?/iu.exec(t);
+    if (r2) { t = t.slice(r2[0].length); mode = 'task'; }
+  }
+  return { text: t.trim(), mode };
+}
+
 export function splitSentences(text) {
   const out = [];
   const hard = (text || '').split(/\s*(?:;|\n)\s*/).filter((x) => x.trim());
   for (const chunk of hard) {
-    // rozdzielamy tylko tam, gdzie z obu stron jest wskazówka czasu
-    const re = /\s+(?:a\s+potem|i\s+potem|a\s+nast[eę]pnie|potem|oraz|i)\s+/giu;
-    let last = 0;
-    let m;
+    // kandydaci na cięcie: przecinki (nie w liczbach), spójniki, „data + czasownik" bez spójnika
     const cuts = [];
-    while ((m = re.exec(chunk))) cuts.push([m.index, m.index + m[0].length]);
-    let start = 0;
-    for (const [a, b] of cuts) {
-      const left = chunk.slice(start, a);
-      const right = chunk.slice(b);
-      if (TIME_CUE.test(norm(left)) && TIME_CUE.test(norm(right))) { out.push(left.trim()); start = b; }
+    const re = /\s*,(?!\d)\s*|\s+(?:a\s+potem|i\s+potem|a\s+nast[eę]pnie|potem|nast[eę]pnie|oraz|a|i)\s+/giu;
+    let m;
+    while ((m = re.exec(chunk))) cuts.push([m.index, m.index + m[0].length, m[0]]);
+    const re2 = new RegExp(`\\s+(?=${LEAD_CUE}\\s+(?:${VERBS})\\b)`, 'g');
+    const nChunk = norm(chunk);
+    while ((m = re2.exec(nChunk))) {
+      const before = nChunk.slice(0, m.index).split(/\s+/).pop();
+      if (m[0].length && !/^(?:w|we|na|do|od|o|przyszly|przyszla|przyszle|nastepny|nastepna|nastepne)$/.test(before) && !cuts.some((c) => Math.abs(c[1] - (m.index + m[0].length)) < 2)) cuts.push([m.index, m.index + m[0].length, ' ']);
     }
-    out.push(chunk.slice(start).trim());
-    void last;
+    cuts.sort((a, b) => a[0] - b[0]);
+    const pieces = [];
+    let pos = 0;
+    for (const [a, b, sep] of cuts) {
+      if (a < pos) continue;
+      pieces.push({ t: chunk.slice(pos, a), sep });
+      pos = b;
+    }
+    pieces.push({ t: chunk.slice(pos), sep: '' });
+    const titled = (x) => !!parse(x, { now: new Date(2026, 0, 5, 8, 0) }).title;
+    let cur = pieces[0].t;
+    for (let k = 1; k < pieces.length; k++) {
+      const right = pieces[k].t;
+      const sep = pieces[k - 1].sep;
+      const left = cur;
+      const boundary = !!left.trim() && !!right.trim() && titled(left) && (verbLed(right) || (hasCue(right) && (hasCue(left) || verbLed(left)) && titled(right)));
+      if (boundary) { out.push(left.trim()); cur = right; }
+      else cur = left + (/,/.test(sep) ? ', ' : sep) + right;
+    }
+    out.push(cur.trim());
   }
   return out.filter(Boolean);
 }
 
 export function parseMulti(text, opts = {}) {
-  const parts = splitSentences(text);
-  if (parts.length < 2) return [parse(text, opts)];
+  const cmd = stripCommand(ordinalDates(text || ''));
+  const force = opts.force ? opts.mode : cmd.mode;
+  const base = { ...opts };
+  const kindOf = (part) => (force ? force : verbLed(part) ? 'task' : opts.mode === 'task' ? 'task' : 'event');
+  const parts = splitSentences(cmd.text);
+  if (parts.length < 2) return [parse(cmd.text, { ...base, mode: kindOf(cmd.text) })];
   const res = [];
   let prev = null;
   for (const part of parts) {
-    const p = parse(part, opts);
-    if (prev && p.kind === 'event' && prev.date && !p.rrule && !DATE_CUE.test(norm(part)) && !p.relative) {
+    const p = parse(part, { ...base, mode: kindOf(part) });
+    if (prev && prev.date && !p.rrule && !DATE_ANY.test(norm(part)) && !p.relative && !p.date) {
+      p.date = prev.date;
+      if (p.kind === 'event' && p.time) p.allDay = false;
+    } else if (prev && prev.date && p.kind === 'event' && !p.rrule && !DATE_ANY.test(norm(part)) && !p.relative) {
       p.date = prev.date;
       if (p.time) p.allDay = false;
     }

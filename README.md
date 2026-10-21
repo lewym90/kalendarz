@@ -11,6 +11,7 @@ Osobiste centrum dowodzenia: kalendarz, zadania i automatyzacje w jednej aplikac
 
 ## Co potrafi
 - Dodawanie zdaniem po polsku: „jutro 17 siłownia", „co drugi wtorek 9:30 dentysta @Mokotów", „urodziny Ani 14 marca"
+- Dodawanie głosem: mikrofon w oknie dodawania (lub mikrofon klawiatury iPhone’a), np. „dodaj do kalendarza wizyta u lekarza trzeciego listopada o 17”; kilka pozycji w jednym zdaniu, także zadania („kup dziś mleko, jutro znajdź opony”); najpierw podgląd, potem „Dodaj”
 - Widoki: Dziś, miesiąc, tydzień, dzień (przeciąganie i zmiana długości), agenda
 - Wydarzenia cykliczne, kategorie, zadania z przenoszeniem zaległych na dziś
 - Reguły: „jeśli kategoria Praca, przypomnij 30 minut wcześniej"
