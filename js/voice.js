@@ -1,6 +1,6 @@
 // Głos bez klawiatury: nagrywamy mikrofonem telefonu, a rozpoznawanie mowy (Whisper) działa w samej aplikacji.
 // Model (~80 MB) pobiera się raz, potem jest w pamięci telefonu i działa także offline.
-const LIB = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.7.6/dist/transformers.web.min.js';
+const LIB = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.7.6/dist/transformers.min.js';
 const MODEL = 'onnx-community/whisper-base';
 const FLAG = 'kalendarz.voiceModel';
 
