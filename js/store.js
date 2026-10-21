@@ -1,5 +1,5 @@
 // Stan aplikacji, zapis lokalny, kopie zapasowe, reguły i przykładowe dane.
-import { uid, ymd, addDays, startOfDay, fmtDT, parseDT, parseYmd, fmtTime } from './util.js';
+import { uid, ymd, addDays, startOfDay, fmtDT, parseDT, parseYmd, fmtTime, pad } from './util.js';
 
 const KEY = 'kalendarz.v1';
 
@@ -227,7 +227,11 @@ function bumpHistory(title, ev) {
   h.cat = ev.cat;
   h.loc = ev.loc;
   h.last = Date.now();
-  if (!ev.allDay) h.dur = Math.max(5, Math.round((parseDT(ev.end) - parseDT(ev.start)) / 60000));
+  if (!ev.allDay) {
+    h.dur = Math.max(5, Math.round((parseDT(ev.end) - parseDT(ev.start)) / 60000));
+    const st = parseDT(ev.start);
+    h.tm = `${pad(st.getHours())}:${pad(st.getMinutes())}`;
+  }
   state.history[key] = h;
 }
 

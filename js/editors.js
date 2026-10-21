@@ -1,7 +1,7 @@
 // Arkusze: szybkie dodawanie, edytor wydarzenia i zadania, reguły, kategorie, szukanie, miasto.
 import { record, transcribe, loadModel, modelReady, canRecord } from './voice.js';
 import {
-  $, $$, esc, ymd, parseYmd, parseDT, fmtDT, fmtTime, pad, addDays, addMinutes, startOfDay, relDay, fmtDayLong, fmtDayMid, fmtDuration, fmtReminder, ICON, haptic, uid, debounce, DAYS_LETTER, MONTHS_GEN, DAYS_SHORT,
+  $, $$, esc, ymd, parseYmd, parseDT, fmtDT, fmtTime, pad, addDays, addMinutes, startOfDay, relDay, fmtDayLong, fmtDayMid, fmtDuration, fmtReminder, capFirst, ICON, haptic, uid, debounce, DAYS_LETTER, MONTHS_GEN, DAYS_SHORT,
 } from './util.js';
 import {
   state, save, catOf, newEvent, addEvent, updateEvent, deleteEvent, deleteOccurrence, detachOccurrence, splitSeries, deleteFollowing, batch, newTask, addTask, updateTask, deleteTask, undo, topHistory, effectiveReminders, applyCreationRules, describeRule as describeRuleDef, CAT_PALETTE,
@@ -10,6 +10,7 @@ import { parse, parseMulti, toEventFields, norm } from './nlp.js';
 import { instancesInRange, describeRule, eventSpan } from './recur.js';
 import { openSheet, closeSheet, toast, rerender, confirmSheet, nav } from './ui.js';
 import { searchCity } from './weather.js';
+import { findSlots } from './planner.js';
 
 const REMIND_OPTS = [0, 5, 10, 15, 30, 60, 120, 1440, 2880];
 export const shortRemind = (m) => (m === 0 ? 'o starcie' : m < 60 ? `${m} min` : m < 1440 ? `${m / 60} godz.` : m === 1440 ? '1 dzień' : `${m / 1440} dni`);
@@ -41,39 +42,63 @@ export function openQuickAdd({ text = '', mode = 'event', ctxDate = null } = {})
   let exIdx = Math.floor(Math.random() * examples.length);
   const hist = topHistory(7);
   const defaults = ['Lunch', 'Trening', 'Spotkanie', 'Zakupy'];
-  const sug = hist.length ? hist.map((h) => h.title) : defaults;
+  const sug = hist.length ? hist.map((x) => ({ title: x.title, tm: x.tm, dur: x.dur, cat: x.cat, loc: x.loc, meta: [x.tm, x.dur ? fmtDuration(x.dur) : ''].filter(Boolean).join(' · ') })) : defaults.map((t) => ({ title: t }));
+  let ov = {};
+  let openKey = null;
+  const uses = () => { try { return parseInt(localStorage.getItem('kalendarz.qaUses') || '0', 10) || 0; } catch { return 0; } };
 
   const h = openSheet(`
     <div class="grab"><i></i></div>
     <div class="sheet-b" style="padding-top:2px">
       <div class="qa-row">
         <div class="seg" role="tablist"><button type="button" data-k="event" class="${kind === 'event' ? 'on' : ''}">Wydarzenie</button><button type="button" data-k="task" class="${kind === 'task' ? 'on' : ''}">Zadanie</button></div>
-        <button type="button" class="link" data-d="more">Więcej opcji</button>
+        <button type="button" class="link" data-d="more">Pełny edytor</button>
       </div>
       <form id="qa-form" autocomplete="off" class="qa-wrap">
         <input id="qa" class="qa-input" type="text" enterkeyhint="done" autocapitalize="sentences" autocomplete="off" placeholder="${esc(examples[exIdx])}" value="${esc(text)}" aria-label="Opisz wydarzenie zdaniem">
         <button type="button" class="qa-mic" id="qa-mic" aria-label="Dyktuj głosem">${ICON.mic}</button>
       </form>
       <div class="mic-hint" id="qa-mic-hint" hidden></div>
-      <div class="preview" id="qa-prev"></div>
+      <div class="qp" id="qa-prev"><div id="qa-sum"></div><div id="qa-pick"></div><div class="qa-warn" id="qa-warn" hidden></div></div>
       <div class="lbl">Ostatnio dodawane</div>
-      <div class="chips scroll" id="qa-sug">${sug.map((s) => `<button type="button" class="chip" data-s="${esc(s)}">${esc(s)}</button>`).join('')}</div>
+      <div class="chips scroll" id="qa-sug">${sug.map((x, i) => `<button type="button" class="chip hab" data-s="${i}">${esc(x.title)}${x.meta ? `<small>${esc(x.meta)}</small>` : ''}</button>`).join('')}</div>
     </div>
-    <div class="sheet-f"><button type="button" class="btn primary" id="qa-add" disabled>Dodaj</button></div>`);
+    <div class="sheet-f"><button type="button" class="btn" id="qa-more" disabled>Dodaj i kolejne</button><button type="button" class="btn primary" id="qa-add" disabled>Dodaj</button></div>`);
 
   const el = h.el;
   const input = $('#qa', el);
-  const prev = $('#qa-prev', el);
+  const prev = $('#qa-sum', el);
+  const pick = $('#qa-pick', el);
+  const warn = $('#qa-warn', el);
+  const moreBtn = $('#qa-more', el);
   const addBtn = $('#qa-add', el);
+
+  const applyOv = (p) => {
+    const todayS = ymd(new Date());
+    if (ov.date) p.date = ov.date;
+    if (ov.noDate) p.date = null;
+    if (ov.allDay) { p.allDay = true; p.time = null; }
+    if (ov.time) { p.time = ov.time; p.allDay = false; }
+    else if (ov.date && p.kind === 'event' && !p.time && !p.allDay && ov.date !== todayS) { p.time = '09:00'; p.allDay = false; }
+    if (ov.noTime) p.time = null;
+    if (ov.dur) { p.durMin = ov.dur; p.durDefault = false; p.endTime = null; }
+    if (ov.freq) p.rrule = ov.freq === 'none' ? null : { freq: ov.freq, interval: 1 };
+    if (ov.remind) p.remind = ov.remind === 'none' ? [] : [...ov.remind];
+    if (ov.cat) { p.cat = ov.cat; p.catInferred = false; }
+    if (ov.loc != null && ov.loc !== '') p.loc = ov.loc;
+  };
 
   const run = () => {
     const all = parseMulti(input.value, { now: new Date(), cats: state.cats, mode: forced || 'event', force: !!forced, history: state.history });
     const p = all[0];
     for (const q of all) fixCtx(q);
+    if (all.length === 1) applyOv(p);
     parsedAll = all;
-    if (!forced && p.kind !== kind) { kind = p.kind; syncSeg(); }
+    if (!forced && p.kind !== kind) { kind = p.kind; syncSeg(); if (openKey && !chipKeys().includes(openKey)) openKey = null; renderPick(); }
     parsed = p;
-    addBtn.disabled = !all.some((x) => x.title);
+    const ok = all.some((x) => x.title);
+    addBtn.disabled = !ok;
+    moreBtn.disabled = !ok;
     addBtn.textContent = all.length > 1 ? `Dodaj ${all.length}` : 'Dodaj';
     renderPreview(p);
   };
@@ -98,44 +123,99 @@ export function openQuickAdd({ text = '', mode = 'event', ctxDate = null } = {})
     return ev;
   };
 
-  const renderPreview = (p) => {
-    if (!input.value.trim()) {
-      prev.innerHTML = `<div class="hint">Wpisz jedno zdanie, a resztę zrobię sam. Na przykład:
-        <div class="chips" style="margin-top:10px">${examples.slice(0, 3).map((x) => `<button type="button" class="chip" data-ex="${esc(x)}">${esc(x)}</button>`).join('')}</div>
-        <div style="margin-top:10px">Dodatki: <b>@miejsce</b>, <b>#kategoria</b>, <b>przypomnij 30 min wcześniej</b>.</div></div>`;
-      return;
+  const chipKeys = () => (kind === 'task' ? ['when', 'time', 'cat'] : ['when', 'time', 'dur', 'rep', 'rem', 'cat', 'loc']);
+  const TIMES = ['08:00', '09:00', '12:00', '15:00', '18:00', '20:00'];
+  const DURS = [15, 30, 45, 60, 90, 120, 180];
+  const REPS = [['none', 'Nie'], ['daily', 'Codziennie'], ['weekly', 'Co tydzień'], ['monthly', 'Co miesiąc'], ['yearly', 'Co rok']];
+  const REMS = [['def', 'Domyślne'], ['none', 'Brak'], [0, 'W chwili startu'], [10, '10 min'], [30, '30 min'], [60, '1 godz.'], [1440, '1 dzień']];
+  const chip = (key, ico, label, state2, extra = '') => `<button type="button" class="chip q ${state2} ${openKey === key ? 'open' : ''}" data-o="${key}" ${extra}>${ico ? `<span class="ico">${ico}</span>` : ''}${esc(label)}</button>`;
+
+  const renderChips = (p) => {
+    const c = catOf(p.cat || 'inne');
+    const catChip = `<button type="button" class="chip q c ${ov.cat ? 'set' : ''} ${openKey === 'cat' ? 'open' : ''}" data-o="cat" style="--c:${c.color}">${esc(c.name)}</button>`;
+    if (p.kind === 'task') {
+      const dateTxt = p.date ? capFirst(relDay(parseYmd(p.date))) : 'Bez terminu';
+      return chip('when', ICON.cal, dateTxt, p.date ? 'set' : 'dim') + chip('time', ICON.clock, p.time || 'Godzina', p.time ? 'set' : 'dim') + catChip;
     }
+    const ev = buildFields(p);
+    const s = parseDT(ev.start);
+    const e = parseDT(ev.end);
+    const noDate = !p.date && !p.rrule;
+    const rem = effectiveReminders(ev).all;
+    return chip('when', ICON.cal, capFirst(relDay(s)), noDate ? 'dim' : 'set')
+      + chip('time', ICON.clock, ev.allDay ? 'Cały dzień' : fmtTime(s), p.time || ev.allDay ? 'set' : 'dim')
+      + (ev.allDay ? '' : chip('dur', '', fmtDuration((e - s) / 60000), ov.dur || (p.durMin && !p.durDefault) ? 'set' : 'dim'))
+      + chip('rep', ICON.repeat, ev.rrule ? describeRule(ev.rrule, s) : 'Nie powtarza', ev.rrule ? 'set' : 'dim')
+      + chip('rem', ICON.bell, rem.length ? rem.map(shortRemind).join(', ') : 'Brak', ov.remind || p.remind ? 'set' : 'dim')
+      + catChip
+      + chip('loc', ICON.pin, ev.loc || 'Miejsce', ev.loc ? 'set' : 'dim');
+  };
+
+  const optBtn = (key, val, label, on) => `<button type="button" class="chip ${on ? 'on' : ''}" data-pk="${key}" data-pv="${esc(String(val))}">${esc(label)}</button>`;
+  const renderPick = () => {
+    if (!openKey || parsedAll.length > 1) { pick.innerHTML = ''; return; }
+    const p = parsed || {};
+    const ev = p.kind === 'task' ? null : buildFields(p);
+    const s = ev ? parseDT(ev.start) : null;
+    const today = startOfDay(new Date());
+    const sat = (() => { let d = today; while (d.getDay() !== 6) d = addDays(d, 1); return d; })();
+    const dOpts = [[0, 'Dziś'], [1, 'Jutro'], [2, 'Pojutrze']].map(([n, l]) => optBtn('when', ymd(addDays(today, n)), l, p.date === ymd(addDays(today, n))));
+    let html = '';
+    if (openKey === 'when') {
+      html = `<div class="chips">${dOpts.join('')}${optBtn('when', ymd(sat), 'Weekend', p.date === ymd(sat))}${p.kind === 'task' ? optBtn('when', 'none', 'Bez terminu', !p.date) : ''}</div>
+        <div class="field qa-f"><span class="ico">${ICON.cal}</span><label class="grow" for="qa-date">Inna data</label><input type="date" id="qa-date" value="${p.date || ymd(today)}"></div>`;
+    } else if (openKey === 'time') {
+      const cur = p.time || '';
+      html = `<div class="chips">${TIMES.map((t) => optBtn('time', t, t, cur === t && !p.allDay)).join('')}${p.kind === 'task' ? optBtn('time', 'none', 'Bez godziny', !p.time) : optBtn('time', 'allday', 'Cały dzień', !!p.allDay)}</div>
+        <div class="field qa-f"><span class="ico">${ICON.clock}</span><label class="grow" for="qa-time">Inna godzina</label><input type="time" id="qa-time" value="${cur || (s ? `${pad(s.getHours())}:${pad(s.getMinutes())}` : '09:00')}"></div>`;
+    } else if (openKey === 'dur') {
+      const cur = ev ? Math.round((parseDT(ev.end) - parseDT(ev.start)) / 60000) : 60;
+      html = `<div class="chips">${DURS.map((m) => optBtn('dur', m, fmtDuration(m), cur === m)).join('')}</div>`;
+    } else if (openKey === 'rep') {
+      const cur = ev && ev.rrule ? ev.rrule.freq : 'none';
+      html = `<div class="chips">${REPS.map(([v, l]) => optBtn('rep', v, l, cur === v)).join('')}</div>`;
+    } else if (openKey === 'rem') {
+      const isOn = (v) => (v === 'def' ? !ov.remind : v === 'none' ? ov.remind === 'none' : Array.isArray(ov.remind) && ov.remind.length === 1 && ov.remind[0] === v);
+      html = `<div class="chips">${REMS.map(([v, l]) => optBtn('rem', v, l, isOn(v))).join('')}</div>`;
+    } else if (openKey === 'cat') {
+      html = `<div class="catrow">${state.cats.map((c) => `<button type="button" class="catdot ${c.id === (p.cat || 'inne') ? 'on' : ''}" style="--c:${c.color}" data-pk="cat" data-pv="${c.id}">${esc(c.name)}</button>`).join('')}</div>`;
+    } else if (openKey === 'loc') {
+      html = `<div class="field qa-f"><span class="ico">${ICON.pin}</span><input id="qa-loc" type="text" placeholder="Dodaj miejsce" value="${esc(ov.loc ?? p.loc ?? '')}" autocomplete="off"></div>`;
+    }
+    pick.innerHTML = `<div class="qa-pick">${html}</div>`;
+  };
+
+  const conflictCheck = (p) => {
+    warn.hidden = true;
+    if (parsedAll.length > 1 || p.kind === 'task' || p.allDay) return;
+    const ev = buildFields(p);
+    if (ev.allDay) return;
+    const s = parseDT(ev.start);
+    const e = parseDT(ev.end);
+    const hit = instancesInRange(state.events, startOfDay(s), addDays(startOfDay(s), 2)).filter((i) => !i.allDay && i.start < e && i.end > s && i.ev.title !== p.title);
+    if (!hit.length) return;
+    const names = hit.slice(0, 2).map((i) => `<b>${esc(i.ev.title)}</b> ${fmtTime(i.start)}–${fmtTime(i.end)}`).join(', ');
+    warn.innerHTML = `<span class="ico">${ICON.bolt}</span><span class="grow">Nakłada się z: ${names}</span><button type="button" class="link" data-free="1">Wolny termin</button>`;
+    warn.hidden = false;
+  };
+
+  const renderPreview = (p) => {
     if (parsedAll.length > 1) {
+      pick.innerHTML = '';
+      warn.hidden = true;
       prev.innerHTML = `<div class="pt">${parsedAll.length} pozycje w jednym zdaniu</div>` + parsedAll.map((q) => {
         const when = q.kind === 'task' ? (q.date ? relDay(parseYmd(q.date)) : 'bez terminu') : (() => { const e2 = buildFields(q); const s2 = parseDT(e2.start); return `${relDay(s2)}${e2.allDay ? ', cały dzień' : ', ' + fmtTime(s2)}`; })();
         const c2 = catOf(q.cat || 'inne');
-        return `<div class="chips" style="margin:6px 0"><span class="chip c pop" style="--c:${c2.color}">${esc(c2.name)}</span><span class="chip pop"><b style="font-weight:700">${esc(q.title || '…')}</b></span><span class="chip pop"><span class="ico">${ICON.cal}</span>${esc(when)}</span>${q.loc ? `<span class="chip pop"><span class="ico">${ICON.pin}</span>${esc(q.loc)}</span>` : ''}</div>`;
+        return `<div class="chips" style="margin:6px 0"><span class="chip c pop" style="--c:${c2.color}">${esc(c2.name)}</span><span class="chip pop"><b style="font-weight:700">${esc(q.title || '…')}</b></span><span class="chip pop"><span class="ico">${q.kind === 'task' ? ICON.flag : ICON.cal}</span>${esc(when)}</span>${q.loc ? `<span class="chip pop"><span class="ico">${ICON.pin}</span>${esc(q.loc)}</span>` : ''}</div>`;
       }).join('');
       return;
     }
-    const chips = [];
-    if (p.kind === 'task') {
-      chips.push(`<span class="chip pop"><span class="ico">${ICON.flag}</span>${p.date ? relDay(parseYmd(p.date)) : 'Bez terminu'}${p.time ? ', ' + p.time : ''}</span>`);
-    } else {
-      const ev = buildFields(p);
-      const s = parseDT(ev.start);
-      const e = parseDT(ev.end);
-      const noInfo = !p.date && !p.time && !p.rrule;
-      chips.push(`<span class="chip pop ${noInfo ? 'ghost' : ''}"><span class="ico">${ICON.cal}</span>${relDay(s)}${ev.allDay ? ', cały dzień' : `, ${fmtTime(s)}–${fmtTime(e)}`}${noInfo ? ' (domyślnie)' : ''}</span>`);
-      if (!ev.allDay && !p.durDefault) chips.push(`<span class="chip pop"><span class="ico">${ICON.clock}</span>${fmtDuration((e - s) / 60000)}</span>`);
-      if (ev.rrule) chips.push(`<span class="chip pop"><span class="ico">${ICON.repeat}</span>${esc(describeRule(ev.rrule, s))}</span>`);
-      if (ev.loc) chips.push(`<span class="chip pop"><span class="ico">${ICON.pin}</span>${esc(ev.loc)}</span>`);
-      if (ev.bday) chips.push(`<span class="chip pop"><span class="ico">${ICON.sparkle}</span>Urodziny${ev.byear ? ', rocznik ' + ev.byear : ''}</span>`);
-      const rem = effectiveReminders(ev).all;
-      if (rem.length) chips.push(`<span class="chip pop"><span class="ico">${ICON.bell}</span>${rem.map(shortRemind).join(', ')}</span>`);
-      if (noInfo) chips.push('<button type="button" class="chip ghost" data-k="task">Dodać jako zadanie?</button>');
-    }
-    const c = catOf(p.cat || 'inne');
-    chips.splice(1, 0, `<span class="chip c pop" style="--c:${c.color}">${esc(c.name)}</span>`);
-    prev.innerHTML = `<div class="pt">${p.title ? esc(p.title) : '<span style="color:var(--text3)">Dopisz nazwę</span>'}</div><div class="chips">${chips.join('')}</div>`;
+    const hintTxt = !input.value.trim() && uses() < 5 ? `<div class="hint">Wpisz jedno zdanie, np. <b>${esc(examples[exIdx])}</b>. Resztę ustawisz dotknięciem.</div>` : '';
+    prev.innerHTML = `<div class="chips qchips">${renderChips(p)}</div>` + hintTxt;
+    conflictCheck(p);
   };
 
-  const submit = () => {
+  const submit = (again = false) => {
     const list = parsedAll.filter((x) => x.title);
     if (!list.length) return;
     haptic();
@@ -153,11 +233,24 @@ export function openQuickAdd({ text = '', mode = 'event', ctxDate = null } = {})
         lastMsg = `Dodano: ${ev.title}, ${inst ? whenLabel(inst).toLowerCase() : ''}`;
       }
     } });
+    try { localStorage.setItem('kalendarz.qaUses', String(uses() + 1)); } catch { /* */ }
     toast(list.length > 1 ? `Dodano ${list.length} pozycje` : lastMsg, { action: 'Cofnij', onAction: () => { undo(); rerender(); } });
+    if (again) {
+      input.value = '';
+      ov = {};
+      openKey = null;
+      forced = mode === 'task' ? 'task' : null;
+      kind = mode;
+      syncSeg();
+      hint('');
+      pick.innerHTML = '';
+      run();
+      rerender();
+      return;
+    }
     closeSheet(h);
     rerender();
   };
-
 
   // --- Głos: nagranie + rozpoznawanie w aplikacji (Whisper); Web Speech tylko w zwykłej przeglądarce
   const micBtn = $('#qa-mic', el);
@@ -255,15 +348,53 @@ export function openQuickAdd({ text = '', mode = 'event', ctxDate = null } = {})
   input.addEventListener('input', () => hint(''));
   input.addEventListener('input', run);
   $('#qa-form', el).addEventListener('submit', (e) => { e.preventDefault(); submit(); });
-  addBtn.addEventListener('click', submit);
+  addBtn.addEventListener('click', () => submit(false));
+  moreBtn.addEventListener('click', () => submit(true));
+  const setOv = (key, val) => {
+    const tog = (k, v) => { if (ov[k] === v) delete ov[k]; else ov[k] = v; };
+    if (key === 'when') { if (val === 'none') { ov.noDate = !ov.noDate; delete ov.date; } else { delete ov.noDate; tog('date', val); } }
+    else if (key === 'time') {
+      if (val === 'allday') { if (ov.allDay) delete ov.allDay; else { ov.allDay = true; delete ov.time; delete ov.noTime; } }
+      else if (val === 'none') { ov.noTime = !ov.noTime; delete ov.time; }
+      else { tog('time', val); delete ov.allDay; delete ov.noTime; }
+    } else if (key === 'dur') tog('dur', parseInt(val, 10));
+    else if (key === 'rep') tog('freq', val);
+    else if (key === 'rem') { if (val === 'def') delete ov.remind; else if (val === 'none') tog('remind', 'none'); else { const n = parseInt(val, 10); if (Array.isArray(ov.remind) && ov.remind[0] === n) delete ov.remind; else ov.remind = [n]; } }
+    else if (key === 'cat') tog('cat', val);
+  };
   el.addEventListener('click', (e) => {
     const t = e.target.closest('button');
     if (!t) return;
-    if (t.dataset.k) { kind = t.dataset.k; forced = kind; syncSeg(); run(); haptic(); }
+    if (t.dataset.o) { openKey = openKey === t.dataset.o ? null : t.dataset.o; haptic(); renderPick(); renderPreview(parsed); return; }
+    if (t.dataset.pk) { setOv(t.dataset.pk, t.dataset.pv); haptic(); run(); renderPick(); return; }
+    if (t.dataset.free) {
+      const p = parsed;
+      const ev = buildFields(p);
+      const dur = Math.max(15, Math.round((parseDT(ev.end) - parseDT(ev.start)) / 60000));
+      const day = startOfDay(parseDT(ev.start));
+      const from = day > startOfDay(new Date()) ? day : new Date();
+      const want = parseDT(ev.start);
+      const sl = findSlots(state.events, { now: from, durMin: dur, days: 14, from: '07:00', to: '22:00', count: 40, step: 15 }).filter((x) => x.start >= from).sort((a, b) => Math.abs(a.start - want) - Math.abs(b.start - want))[0];
+      if (!sl) { toast('Brak wolnego terminu w ciągu dwóch tygodni'); return; }
+      ov.date = ymd(sl.start);
+      ov.time = `${pad(sl.start.getHours())}:${pad(sl.start.getMinutes())}`;
+      delete ov.allDay; delete ov.noTime;
+      haptic(); run(); renderPick();
+      return;
+    }
+    if (t.dataset.k) { kind = t.dataset.k; forced = kind; if (kind === 'task') { delete ov.dur; delete ov.freq; delete ov.remind; delete ov.loc; delete ov.allDay; } syncSeg(); if (openKey && !chipKeys().includes(openKey)) openKey = null; run(); renderPick(); haptic(); }
     else if (t.dataset.s) {
-      input.value = t.dataset.s;
+      const x = sug[parseInt(t.dataset.s, 10)];
+      if (!x) return;
+      ov = {};
+      input.value = x.title;
+      if (x.tm && kind !== 'task') ov.time = x.tm;
+      if (x.dur && kind !== 'task') ov.dur = x.dur;
+      if (x.cat) ov.cat = x.cat;
+      if (x.loc) ov.loc = x.loc;
+      hint('');
       run();
-      input.focus();
+      renderPick();
     } else if (t.dataset.ex) {
       input.value = t.dataset.ex;
       run();
@@ -276,6 +407,15 @@ export function openQuickAdd({ text = '', mode = 'event', ctxDate = null } = {})
         openEventEditor({ draft: base ? { ...base } : ctxDate ? defaultDraftFor(ctxDate) : null });
       }
     }
+  });
+  // pola daty, godziny i miejsca w panelu nie są odtwarzane w trakcie wybierania (iOS zamykałby okienko)
+  el.addEventListener('change', (e) => {
+    const t = e.target;
+    if (t.id === 'qa-date' && t.value) { ov.date = t.value; run(); }
+    else if (t.id === 'qa-time' && t.value) { ov.time = t.value; delete ov.allDay; delete ov.noTime; run(); }
+  });
+  el.addEventListener('input', (e) => {
+    if (e.target.id === 'qa-loc') { ov.loc = e.target.value.trim(); run(); }
   });
   const cycle = setInterval(() => {
     if (h.closed) return clearInterval(cycle);
