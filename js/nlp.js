@@ -534,3 +534,52 @@ export function parseMulti(text, opts = {}) {
   }
   return res;
 }
+
+// ---------- Poprawianie rozpoznanej mowy słownikiem (siłownia, nie „szyłownia") ----------
+const VOICE_WORDS = ('siłownia siłowni siłownię trening treningi basen basenie joga jogi pilates bieganie bieg rower rowerem spacer lekarz lekarza lekarzem dentysta dentystę dentysty ortodonta okulista okulisty fizjoterapeuta fizjoterapeuty wizyta wizytę wizyty spotkanie spotkania spotkaniu zakupy zakupów urodziny urodzin imieniny imienin fryzjer fryzjera fryzjerze kosmetyczka kosmetyczki weterynarz weterynarza przegląd przeglądu rachunek rachunki rachunków przelew podatek faktura faktury kolacja kolację obiad obiadu lunch lunchu śniadanie mecz meczu kino kina teatr teatru koncert koncertu szkoła szkole przedszkole przedszkola zebranie rodzice rodziców rodzicami babcia babci dziadek dziadka wyjazd wyjazdu urlop urlopu wakacje podróż lotnisko pociąg samolot paczka paczkę sprzątanie pranie naprawa hydraulik serwis remont ogród śmieci mleko chleb masło opony opon zimowe zimowych tabletki leki apteka apteki kurs lekcja lekcje egzamin wykład szkolenie angielski hiszpański niemiecki korepetycje praca pracy projekt prezentacja klient klienta deadline sprint termin telefon zadzwonić zadzwoń kup kupić znajdź znaleźć umów umówić zapłać zapłacić załatw załatwić sprawdź sprawdzić napisz napisać wyślij wyślij odbierz odebrać zamów zamówić zrób zrobić przygotuj oddaj weź pamiętaj wymień wymienić umyj posprzątaj wynieś zanieś odnieś zarezerwuj anuluj wydrukuj ogarnij podlej nakarm rozlicz wypełnij złóż odnów ustaw poszukaj dokup przeczytaj obejrzyj jutro pojutrze dzisiaj poniedziałek wtorek środa środę czwartek piątek sobota sobotę niedziela niedzielę stycznia lutego marca kwietnia maja czerwca lipca sierpnia września października listopada grudnia tydzień weekend przypomnij przypomnienie kalendarza zadanie wydarzenie').split(/\s+/);
+const nn = (s) => norm(s).replace(/[^a-z0-9]/g, '');
+
+function editDist(a, b, max) {
+  if (Math.abs(a.length - b.length) > max) return max + 1;
+  const prev = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    const cur = [i];
+    let rowMin = i;
+    for (let j = 1; j <= b.length; j++) {
+      let v = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+      if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) v = Math.min(v, prev[j - 2] + 1);
+      cur[j] = v;
+      if (v < rowMin) rowMin = v;
+    }
+    if (rowMin > max) return max + 1;
+    prev.splice(0, prev.length, ...cur);
+  }
+  return prev[b.length];
+}
+
+export function fixVoice(text, extra = []) {
+  const known = new Map();
+  for (const w of [...VOICE_WORDS, ...extra]) {
+    const k = nn(w);
+    if (k.length >= 4 && !known.has(k)) known.set(k, w.toLowerCase());
+  }
+  const out = (text || '').trim().replace(/[.!?…]+$/u, '').replace(/\s+/g, ' ').replace(/\b(\d{1,2})[.,](\d{2})\b/g, '$1:$2');
+  return out.replace(/[\p{L}]{4,}/gu, (word) => {
+    const k = nn(word);
+    const cap0 = word[0] !== word[0].toLowerCase();
+    if (known.has(k)) { const o = known.get(k); return cap0 ? o[0].toUpperCase() + o.slice(1) : o; }
+    const max = k.length >= 8 ? 2 : k.length >= 5 ? 1 : 0;
+    if (!max) return word;
+    let best = null;
+    let bd = max + 1;
+    for (const [kk, orig] of known) {
+      if (kk[0] !== k[0] && !(kk[0] === 's' && k[0] === 's') && !/^(sz|s)/.test(k) ) continue;
+      const d = editDist(k, kk, max);
+      if (d < bd) { bd = d; best = orig; }
+      else if (d === bd && best && Math.abs(kk.length - k.length) < Math.abs(nn(best).length - k.length)) best = orig;
+    }
+    if (!best || bd > max) return word;
+    const cap = word[0] !== word[0].toLowerCase();
+    return cap ? best[0].toUpperCase() + best.slice(1) : best;
+  });
+}

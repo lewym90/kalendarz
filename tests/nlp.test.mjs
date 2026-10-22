@@ -74,3 +74,12 @@ test('głos: zadania z różnymi dniami', () => {
   assert.deepEqual(b.map((x) => [x.kind, x.date]), [['task', '2026-10-21'], ['task', '2026-10-22'], ['task', '2026-10-26']]);
   assert.equal(parseMulti('kup chleb i mleko', { now, cats: DEFAULT_CATS }).length, 1);
 });
+
+test('głos: poprawianie słownikiem', async () => {
+  const { fixVoice } = await import('../js/nlp.js');
+  assert.equal(fixVoice('Szyłownia w piątek o 16.'), 'Siłownia w piątek o 16');
+  assert.equal(fixVoice('Śniłownia jutro o 17'), 'Siłownia jutro o 17');
+  assert.equal(fixVoice('wizyta u lekarzu 3 listopada o 17,30'), 'wizyta u lekarza 3 listopada o 17:30');
+  assert.equal(fixVoice('Sniadanie z Olą'), 'Śniadanie z Olą');
+  assert.equal(fixVoice('spotkanie z Anią'), 'spotkanie z Anią');
+});

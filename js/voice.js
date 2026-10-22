@@ -2,44 +2,100 @@
 // Model (~80 MB) pobiera się raz, potem jest w pamięci telefonu i działa także offline.
 const LIB = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.7.6/dist/transformers.min.js';
 const MODEL = 'onnx-community/whisper-base';
+const MODEL_HQ = 'onnx-community/whisper-small';
 const FLAG = 'kalendarz.voiceModel';
 
-let pipe = null;
-let loading = null;
+export const config = { hq: true };
+const FLAG_HQ = 'kalendarz.voiceHqModel';
+const FAIL_HQ = 'kalendarz.voiceHqFail';
+const get = (k) => { try { return localStorage.getItem(k); } catch { return null; } };
+const put = (k, v) => { try { localStorage.setItem(k, v); } catch { /* */ } };
 
-export const modelReady = () => { try { return localStorage.getItem(FLAG) === '1'; } catch { return false; } };
+const pipes = { base: null, hq: null };
+const loading = {};
+let lib = null;
+let gpuInfo;
+
+export const modelReady = () => get(FLAG) === '1' || get(FLAG_HQ) === '1';
 export const canRecord = () => !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia && (window.AudioContext || window.webkitAudioContext));
 
-export function loadModel(onProgress) {
-  if (pipe) return Promise.resolve(pipe);
-  if (loading) { loading.cbs.push(onProgress); return loading.p; }
+async function gpu() {
+  if (gpuInfo !== undefined) return gpuInfo;
+  gpuInfo = null;
+  try {
+    const ad = navigator.gpu && (await navigator.gpu.requestAdapter());
+    if (ad) gpuInfo = { f16: ad.features && ad.features.has('shader-f16') };
+  } catch { /* */ }
+  return gpuInfo;
+}
+
+const failedRecently = () => Date.now() - (parseInt(get(FAIL_HQ) || '0', 10) || 0) < 6 * 3600 * 1000;
+const wantHq = async () => config.hq && !failedRecently() && !!(await gpu());
+
+async function importLib() {
+  if (lib) return lib;
+  let T;
+  try { T = await import(/* webpackIgnore: true */ LIB); } catch (e) { throw new Error('biblioteka: ' + (e && e.message ? e.message : e)); }
+  T.env.allowLocalModels = false;
+  try { T.env.backends.onnx.wasm.numThreads = 1; T.env.backends.onnx.wasm.proxy = false; } catch { /* */ }
+  lib = T;
+  return T;
+}
+
+function load(kind, onProgress) {
+  if (pipes[kind]) return Promise.resolve(pipes[kind]);
+  if (loading[kind]) { loading[kind].cbs.push(onProgress); return loading[kind].p; }
   const cbs = [onProgress];
   const files = {};
   const p = (async () => {
-    let T;
-    try { T = await import(/* webpackIgnore: true */ LIB); } catch (e) { throw new Error('biblioteka: ' + (e && e.message ? e.message : e)); }
-    T.env.allowLocalModels = false;
-    try { T.env.backends.onnx.wasm.numThreads = 1; T.env.backends.onnx.wasm.proxy = false; } catch { /* */ }
+    const T = await importLib();
+    const g = kind === 'hq' ? await gpu() : null;
+    const opts = kind === 'hq'
+      ? { device: 'webgpu', dtype: { encoder_model: g && g.f16 ? 'fp16' : 'fp32', decoder_model_merged: 'q4' } }
+      : { device: 'wasm', dtype: 'q8' };
     let tr;
-    try { tr = await T.pipeline('automatic-speech-recognition', MODEL, {
-      dtype: 'q8',
-      device: 'wasm',
-      progress_callback: (e) => {
-        if (e.status === 'progress' && e.total) {
-          files[e.file] = [e.loaded, e.total];
-          let l = 0; let t = 0;
-          for (const k in files) { l += files[k][0]; t += files[k][1]; }
-          for (const f of cbs) f && f(Math.min(99, Math.round((l / t) * 100)));
-        }
-      },
-    }); } catch (e) { throw new Error('model: ' + (e && e.message ? e.message : String(e))); }
-    pipe = tr;
-    try { localStorage.setItem(FLAG, '1'); } catch { /* */ }
+    try {
+      tr = await T.pipeline('automatic-speech-recognition', kind === 'hq' ? MODEL_HQ : MODEL, {
+        ...opts,
+        progress_callback: (e) => {
+          if (e.status === 'progress' && e.total) {
+            files[e.file] = [e.loaded, e.total];
+            let l = 0; let t = 0;
+            for (const k in files) { l += files[k][0]; t += files[k][1]; }
+            for (const f of cbs) f && f(Math.min(99, Math.round((l / t) * 100)));
+          }
+        },
+      });
+    } catch (e) { throw new Error('model: ' + (e && e.message ? e.message : String(e))); }
+    pipes[kind] = tr;
+    put(kind === 'hq' ? FLAG_HQ : FLAG, '1');
     return tr;
   })();
-  loading = { p, cbs };
-  p.catch(() => { loading = null; });
+  loading[kind] = { p, cbs };
+  p.catch(() => { delete loading[kind]; });
   return p;
+}
+
+const hqFailed = (e) => { put(FAIL_HQ, String(Date.now())); pipes.hq = null; delete loading.hq; void e; };
+
+// Zwraca { tr, kind }: dokładny model, gdy jest gotowy; w przeciwnym razie mały (a dokładny dociąga się w tle).
+export async function getPipe(onProgress) {
+  if (await wantHq()) {
+    if (pipes.hq) return { tr: pipes.hq, kind: 'hq' };
+    const haveBase = get(FLAG) === '1' || pipes.base;
+    const hqP = load('hq', haveBase ? null : onProgress);
+    hqP.catch(hqFailed);
+    if (haveBase) return { tr: await load('base', onProgress), kind: 'base' };
+    try { return { tr: await hqP, kind: 'hq' }; } catch { /* spadamy na mały model */ }
+  }
+  return { tr: await load('base', onProgress), kind: 'base' };
+}
+
+export const loadModel = async (onProgress) => (await getPipe(onProgress)).tr;
+// Rozgrzanie w tle po otwarciu okna dodawania (jeśli modele są już pobrane)
+export async function warm() {
+  if (!modelReady()) return;
+  try { if (get(FLAG_HQ) === '1' && (await wantHq())) await load('hq').catch(hqFailed); else if (get(FLAG) === '1') await load('base'); } catch { /* */ }
 }
 
 // Nagrywanie z automatycznym zakończeniem po ciszy. Próbki PCM pobieramy wprost z mikrofonu (bez kodeków),
@@ -103,8 +159,16 @@ export async function record({ onLevel, maxMs = 30000, silenceMs = 1600 } = {}) 
 }
 
 export async function transcribe(pcm) {
-  const tr = await loadModel();
+  const run = async (tr) => {
+    try { return await tr(pcm, { language: 'polish', task: 'transcribe', chunk_length_s: 30 }); } catch (e) { throw new Error('rozpoznawanie: ' + (e && e.message ? e.message : String(e))); }
+  };
+  let { tr, kind } = await getPipe();
   let out;
-  try { out = await tr(pcm, { language: 'polish', task: 'transcribe', chunk_length_s: 30 }); } catch (e) { throw new Error('rozpoznawanie: ' + (e && e.message ? e.message : String(e))); }
+  try { out = await run(tr); } catch (e) {
+    if (kind !== 'hq') throw e;
+    hqFailed(e);
+    tr = await load('base');
+    out = await run(tr);
+  }
   return (out.text || '').replace(/\s+/g, ' ').trim();
 }

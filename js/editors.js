@@ -1,12 +1,12 @@
 // Arkusze: szybkie dodawanie, edytor wydarzenia i zadania, reguły, kategorie, szukanie, miasto.
-import { record, transcribe, loadModel, modelReady, canRecord } from './voice.js';
+import { record, transcribe, loadModel, modelReady, canRecord, warm, config as voiceCfg } from './voice.js';
 import {
   $, $$, esc, ymd, parseYmd, parseDT, fmtDT, fmtTime, pad, addDays, addMinutes, startOfDay, relDay, fmtDayLong, fmtDayMid, fmtDuration, fmtReminder, capFirst, ICON, haptic, uid, debounce, DAYS_LETTER, MONTHS_GEN, DAYS_SHORT,
 } from './util.js';
 import {
   state, save, catOf, newEvent, addEvent, updateEvent, deleteEvent, deleteOccurrence, detachOccurrence, splitSeries, deleteFollowing, batch, newTask, addTask, updateTask, deleteTask, undo, topHistory, effectiveReminders, applyCreationRules, describeRule as describeRuleDef, CAT_PALETTE,
 } from './store.js';
-import { parse, parseMulti, toEventFields, norm } from './nlp.js';
+import { parse, parseMulti, toEventFields, norm, fixVoice } from './nlp.js';
 import { instancesInRange, describeRule, eventSpan } from './recur.js';
 import { openSheet, closeSheet, toast, rerender, confirmSheet, nav } from './ui.js';
 import { searchCity } from './weather.js';
@@ -267,7 +267,9 @@ export function openQuickAdd({ text = '', mode = 'event', ctxDate = null } = {})
     hint(why || 'Dotknij mikrofonu na klawiaturze iPhone’a i mów — zdanie pojawi się samo.');
     input.focus();
   };
-  const putText = (t) => {
+  const putText = (raw) => {
+    const extra = [...Object.values(state.history).map((x) => x.title), ...state.events.map((x) => x.title), ...state.tasks.map((x) => x.title)].join(' ').split(/\s+/).filter((w) => w.length >= 4);
+    const t = fixVoice(raw, extra);
     const base = input.value.trim();
     input.value = (base ? base + ' ' : '') + t;
     run();
@@ -345,7 +347,8 @@ export function openQuickAdd({ text = '', mode = 'event', ctxDate = null } = {})
     else if (canRecord()) startWhisper();
     else kbFallback();
   });
-  if (canRecord() && modelReady() && !(SR && !standalone)) setTimeout(() => loadModel().catch(() => {}), 600);
+  voiceCfg.hq = state.settings.voiceHq !== false;
+  if (canRecord() && modelReady() && !(SR && !standalone)) setTimeout(() => warm(), 600);
   input.addEventListener('input', () => hint(''));
   input.addEventListener('input', run);
   $('#qa-form', el).addEventListener('submit', (e) => { e.preventDefault(); submit(); });
