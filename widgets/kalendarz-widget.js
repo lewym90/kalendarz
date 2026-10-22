@@ -128,17 +128,19 @@ function planRow(p, i, now, o) {
   txt(tm, i.isNow ? 'teraz' : (i.label || i.s || (i.k === 't' ? 'zadanie' : '')), o.size - 1, 'b', i.isNow ? C(ACCENT) : DIM());
   if (i.w) { const b = r.addStack(); b.size = new Size(15, 15); b.cornerRadius = 7.5; b.backgroundColor = C(i.c || '#34d3ff'); b.centerAlignContent(); const lt = b.addText(String(i.w)); lt.font = Font.heavySystemFont(10); lt.textColor = WHITE(); lt.lineLimit = 1; lt.centerAlignText(); }
   txt(r, (i.k === 't' ? '☐ ' : '') + i.t, o.size, 'm', WHITE());
+  r.addSpacer();
   return r;
 }
+function leftRow(p, o, fn) { const r = p.addStack(); r.centerAlignContent(); r.spacing = 6; if (o && o.w) r.size = new Size(o.w, o.h || 0); fn(r); r.addSpacer(); return r; }
 function plan(p, m, max, o) {
   if (!m.rows.length) {
-    txt(p, 'Dziś bez planów', o.size + 1, 'b', WHITE());
-    if (m.tomorrowFirst) txt(p, `Jutro: ${line(m.tomorrowFirst)}`, o.size - 1, 'm', DIM(), 2);
+    leftRow(p, { w: o.w, h: o.h }, (r) => { icon(r, 'checkmark.circle', o.size + 4, C(ACCENT)); txt(r, 'Dziś bez planów', o.size + 1, 'b', WHITE()); });
+    if (m.tomorrowFirst) leftRow(p, { w: o.w }, (r) => txt(r, `Jutro: ${line(m.tomorrowFirst)}`, o.size - 1, 'm', DIM(), 2));
     return;
   }
   const n = m.rows.length <= max ? max : max - 1;
   m.rows.slice(0, n).forEach((i) => planRow(p, i, m.now, o));
-  if (m.rows.length > n) txt(p, `+${m.rows.length - n} więcej`, o.size - 2, 'm', FAINT());
+  if (m.rows.length > n) leftRow(p, { w: o.w }, (r) => txt(r, `+${m.rows.length - n} więcej`, o.size - 2, 'm', FAINT()));
 }
 function weatherRow(p, wx, o) {
   const r = p.addStack(); r.centerAlignContent(); r.spacing = 7;
@@ -228,7 +230,9 @@ function homeWidget(w, family, m, wx, stale, param) {
     // Znacznik widać tylko, gdy coś jest nie tak: brak połączenia z serwerem albo dane starsze niż 6 dni (plan jest wysyłany na 7 dni do przodu).
     if (dres.stale) txt(hd, `⚠ ${dres.fail || 'offline'}`, 8.5, 'b', C(ACCENT));
     else if (syncGen && now.getTime() - syncGen > 6 * 86400000) txt(hd, '⚠ stare dane', 8.5, 'b', C(ACCENT));
-    weatherRow(rc, wx, { icon: 22, temp: 25, size: 10.5 });
+    const wr = rc.addStack(); wr.size = new Size(RW, 30); wr.centerAlignContent();
+    weatherRow(wr, wx, { icon: 22, temp: 26, size: 10.5 });
+    wr.addSpacer();
     const hr = rc.addStack(); hr.size = new Size(RW, 0.5); hr.backgroundColor = C('#ffffff', 0.16);
     plan(rc, m, 4, { size: 12, h: 20, tw: 33, w: RW });
     rc.addSpacer();
