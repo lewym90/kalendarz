@@ -42,7 +42,7 @@ const DEFAULT_SETTINGS = {
   accentCustom: '',
   welcomed: false,
   autoLoc: true,
-  voiceHq: true,
+  voiceHq2: false,
   share: { on: true, view: false, name: '', color: '#34d3ff' },
 };
 

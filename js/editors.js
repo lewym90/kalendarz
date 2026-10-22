@@ -347,7 +347,7 @@ export function openQuickAdd({ text = '', mode = 'event', ctxDate = null } = {})
     else if (canRecord()) startWhisper();
     else kbFallback();
   });
-  voiceCfg.hq = state.settings.voiceHq !== false;
+  voiceCfg.hq = !!state.settings.voiceHq2;
   if (canRecord() && modelReady() && !(SR && !standalone)) setTimeout(() => warm(), 600);
   input.addEventListener('input', () => hint(''));
   input.addEventListener('input', run);

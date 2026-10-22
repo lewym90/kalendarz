@@ -5,7 +5,8 @@ const MODEL = 'onnx-community/whisper-base';
 const MODEL_HQ = 'onnx-community/whisper-small';
 const FLAG = 'kalendarz.voiceModel';
 
-export const config = { hq: true };
+export const config = { hq: false };
+const TRY_HQ = 'kalendarz.hqTry';
 const FLAG_HQ = 'kalendarz.voiceHqModel';
 const FAIL_HQ = 'kalendarz.voiceHqFail';
 const get = (k) => { try { return localStorage.getItem(k); } catch { return null; } };
@@ -30,7 +31,12 @@ async function gpu() {
 }
 
 const failedRecently = () => Date.now() - (parseInt(get(FAIL_HQ) || '0', 10) || 0) < 6 * 3600 * 1000;
-const wantHq = async () => config.hq && !failedRecently() && !!(await gpu());
+const wantHq = async () => {
+  // jeśli poprzednia próba dokładnego modelu nie dobiegła końca (strona się zrestartowała), uznajemy, że telefon sobie nie radzi
+  if (get(TRY_HQ) && !loading.hq && !pipes.hq) { put(FAIL_HQ, String(Date.now())); try { localStorage.removeItem(TRY_HQ); } catch { /* */ } }
+  return wantHq2();
+};
+const wantHq2 = async () => config.hq && !failedRecently() && !!(await gpu());
 
 async function importLib() {
   if (lib) return lib;
@@ -49,6 +55,7 @@ function load(kind, onProgress) {
   const files = {};
   const p = (async () => {
     const T = await importLib();
+    if (kind === 'hq') put(TRY_HQ, String(Date.now()));
     const g = kind === 'hq' ? await gpu() : null;
     const opts = kind === 'hq'
       ? { device: 'webgpu', dtype: { encoder_model: g && g.f16 ? 'fp16' : 'fp32', decoder_model_merged: 'q4' } }
@@ -82,11 +89,9 @@ const hqFailed = (e) => { put(FAIL_HQ, String(Date.now())); pipes.hq = null; del
 export async function getPipe(onProgress) {
   if (await wantHq()) {
     if (pipes.hq) return { tr: pipes.hq, kind: 'hq' };
-    const haveBase = get(FLAG) === '1' || pipes.base;
-    const hqP = load('hq', haveBase ? null : onProgress);
-    hqP.catch(hqFailed);
-    if (haveBase) return { tr: await load('base', onProgress), kind: 'base' };
-    try { return { tr: await hqP, kind: 'hq' }; } catch { /* spadamy na mały model */ }
+    // gdy mały model jest już na telefonie, używamy go teraz, a dokładny dociągnie się dopiero po rozpoznaniu
+    if (get(FLAG) === '1' || pipes.base) return { tr: await load('base', onProgress), kind: 'base' };
+    try { return { tr: await load('hq', onProgress), kind: 'hq' }; } catch (e) { hqFailed(e); }
   }
   return { tr: await load('base', onProgress), kind: 'base' };
 }
@@ -95,7 +100,7 @@ export const loadModel = async (onProgress) => (await getPipe(onProgress)).tr;
 // Rozgrzanie w tle po otwarciu okna dodawania (jeśli modele są już pobrane)
 export async function warm() {
   if (!modelReady()) return;
-  try { if (get(FLAG_HQ) === '1' && (await wantHq())) await load('hq').catch(hqFailed); else if (get(FLAG) === '1') await load('base'); } catch { /* */ }
+  try { if (config.hq && get(FLAG_HQ) === '1' && (await wantHq())) await load('hq').catch(hqFailed); else if (get(FLAG) === '1') await load('base'); } catch { /* */ }
 }
 
 // Nagrywanie z automatycznym zakończeniem po ciszy. Próbki PCM pobieramy wprost z mikrofonu (bez kodeków),
@@ -170,5 +175,7 @@ export async function transcribe(pcm) {
     tr = await load('base');
     out = await run(tr);
   }
+  if (kind === 'hq') { try { localStorage.removeItem(TRY_HQ); } catch { /* */ } }
+  else setTimeout(async () => { if (await wantHq() && !pipes.hq && !loading.hq) load('hq').catch(hqFailed); }, 4000);
   return (out.text || '').replace(/\s+/g, ' ').trim();
 }
