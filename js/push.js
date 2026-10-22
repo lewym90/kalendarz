@@ -135,6 +135,28 @@ export function agendaPayload(now = new Date()) {
   return { days, cnt, pcnt, pcol, geo: { n: c.name || '', lat: c.lat, lon: c.lon } };
 }
 
+// Rozpoznawanie mowy na serwerze (usługa kalendarz-stt). Próbki 16 kHz → int16, token w nagłówku.
+export const sttAvailable = () => { const c = read(); return !!(c && c.token && c.url && c.deviceId); };
+export async function sttTranscribe(pcm, prompt = '') {
+  const cfg = read();
+  if (!cfg || !cfg.token) throw new Error('brak połączenia z serwerem');
+  let peak = 0;
+  for (let i = 0; i < pcm.length; i++) { const v = Math.abs(pcm[i]); if (v > peak) peak = v; }
+  const gain = peak > 0.001 ? Math.min(8, 0.9 / peak) : 1;
+  const i16 = new Int16Array(pcm.length);
+  for (let i = 0; i < pcm.length; i++) i16[i] = Math.max(-32768, Math.min(32767, Math.round(pcm[i] * gain * 32767)));
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), 60000);
+  try {
+    const r = await fetch(`${cfg.url}/stt?d=${encodeURIComponent(cfg.deviceId)}&p=${encodeURIComponent(prompt.slice(0, 380))}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/octet-stream', Authorization: `Bearer ${cfg.token}` }, body: i16.buffer, signal: ctl.signal,
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw Object.assign(new Error(j.error || `Błąd ${r.status}`), { status: r.status });
+    return String(j.text || '').trim();
+  } finally { clearTimeout(timer); }
+}
+
 export function pushApi(path, body) {
   const cfg = read();
   if (!cfg || !cfg.token) return Promise.reject(new Error('brak połączenia z serwerem'));

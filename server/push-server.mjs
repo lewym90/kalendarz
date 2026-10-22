@@ -20,6 +20,7 @@ const cfg = {
   maxAlarms: +(process.env.MAX_ALARMS || 600),
   lateMs: +(process.env.LATE_MS || 2 * 3600000),   // alarmy spóźnione o więcej nie są wysyłane
   tickMs: +(process.env.TICK_MS || 15000),
+  sttUrl: process.env.STT_URL || 'http://127.0.0.1:8791',
 };
 
 export const sha = (s) => crypto.createHash('sha256').update(s).digest('hex');
@@ -92,6 +93,36 @@ const limited = (ip) => {
   if (hits.size > 5000) for (const x of hits.keys()) if (!x.endsWith(`:${m}`)) hits.delete(x);
   return hits.get(k) > 120;
 };
+
+function readRaw(req, max) {
+  return new Promise((resolve, reject) => {
+    let n = 0; const chunks = [];
+    req.on('data', (c) => { n += c.length; if (n > max) { reject(Object.assign(new Error('za duże'), { code: 413 })); req.destroy(); } else chunks.push(c); });
+    req.on('end', () => resolve(Buffer.concat(chunks)));
+    req.on('error', reject);
+  });
+}
+
+// Rozpoznawanie mowy: aplikacja wysyła próbki PCM, serwer przekazuje je do lokalnej usługi kalendarz-stt (jeśli zainstalowana).
+export async function handleStt(req) {
+  const u = new URL(req.url, 'http://x');
+  const id = u.searchParams.get('d');
+  const tok = (req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+  const dev = validId(id) ? db.devices[id] : null;
+  if (!dev || !tok || !safeEq(sha(tok), dev.tokenHash)) return [401, { error: 'brak uprawnień' }];
+  const raw = await readRaw(req, 1_200_000);
+  if (raw.length < 3200) return [400, { error: 'za krótkie nagranie' }];
+  const prompt = (u.searchParams.get('p') || '').slice(0, 400);
+  return new Promise((resolve) => {
+    const r = http.request(`${cfg.sttUrl}/transcribe?p=${encodeURIComponent(prompt)}`, { method: 'POST', headers: { 'Content-Length': raw.length }, timeout: 90000 }, (res2) => {
+      const ch = []; res2.on('data', (c) => ch.push(c));
+      res2.on('end', () => { try { resolve([res2.statusCode === 200 ? 200 : 502, JSON.parse(Buffer.concat(ch).toString('utf8'))]); } catch (_) { resolve([502, { error: 'zła odpowiedź' }]); } });
+    });
+    r.on('timeout', () => { r.destroy(); resolve([504, { error: 'za długo' }]); });
+    r.on('error', () => resolve([503, { error: 'usługa rozpoznawania nie działa' }]));
+    r.end(raw);
+  });
+}
 
 function readBody(req, max = 600_000) {
   return new Promise((resolve, reject) => {
@@ -214,6 +245,7 @@ export function createServer() {
     const ip = (req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').split(',')[0].trim();
     if (limited(ip)) return send(429, { error: 'za dużo żądań' });
     try {
+      if (req.method === 'POST' && req.url.split('?')[0].replace(/\/+$/, '') === '/stt') { const [c, o] = await handleStt(req); return send(c, o); }
       const body = req.method === 'POST' ? await readBody(req) : {};
       const [code, obj] = await handle(req.method, req.url, req.headers, body);
       send(code, obj);

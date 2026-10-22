@@ -11,6 +11,7 @@ import { instancesInRange, describeRule, eventSpan } from './recur.js';
 import { openSheet, closeSheet, toast, rerender, confirmSheet, nav } from './ui.js';
 import { searchCity } from './weather.js';
 import { findSlots } from './planner.js';
+import { sttAvailable, sttTranscribe } from './push.js';
 
 const REMIND_OPTS = [0, 5, 10, 15, 30, 60, 120, 1440, 2880];
 export const shortRemind = (m) => (m === 0 ? 'o starcie' : m < 60 ? `${m} min` : m < 1440 ? `${m / 60} godz.` : m === 1440 ? '1 dzień' : `${m / 1440} dni`);
@@ -260,6 +261,7 @@ export function openQuickAdd({ text = '', mode = 'event', ctxDate = null } = {})
   let rec = null;
   let listening = false;
   let recSession = null;
+  let sttDown = false;
   const hint = (msg) => { micHint.hidden = !msg; micHint.textContent = msg || ''; };
   const setListening = (on) => { listening = on; micBtn.classList.toggle('on', on); micBtn.setAttribute('aria-pressed', on ? 'true' : 'false'); };
   const kbFallback = (why) => {
@@ -274,9 +276,14 @@ export function openQuickAdd({ text = '', mode = 'event', ctxDate = null } = {})
     input.value = (base ? base + ' ' : '') + t;
     run();
   };
+  const voicePrompt = () => {
+    const titles = Object.values(state.history).sort((a, b) => b.n - a.n).slice(0, 8).map((x) => x.title);
+    return `Siłownia w piątek o 16. Dentysta jutro o 9:30. Kup mleko. ${titles.join('. ')}`.trim();
+  };
   const startWhisper = async () => {
     haptic();
-    const first = !modelReady();
+    const viaServer = sttAvailable() && !sttDown;
+    const first = !modelReady() && !viaServer;
     let pct = 0;
     let phase = 'listen';
     const status = () => {
@@ -292,8 +299,7 @@ export function openQuickAdd({ text = '', mode = 'event', ctxDate = null } = {})
     }
     setListening(true);
     status();
-    ready = loadModel((v) => { pct = v; status(); });
-    ready.catch(() => {});
+    if (!viaServer) { ready = loadModel((v) => { pct = v; status(); }); ready.catch(() => {}); }
     input.blur();
     const sess = recSession;
     try {
@@ -304,8 +310,16 @@ export function openQuickAdd({ text = '', mode = 'event', ctxDate = null } = {})
       if (!heard) { hint('Nic nie usłyszałem — dotknij mikrofonu i spróbuj jeszcze raz.'); return; }
       phase = 'think';
       pct = first ? pct : 100;
-      status();
-      const text = await transcribe(pcm);
+      let text = null;
+      if (viaServer) {
+        hint('Rozpoznaję…');
+        try { text = await sttTranscribe(pcm, voicePrompt()); } catch (e) { if (!e.status || e.status >= 500 || e.status === 404) sttDown = true; text = null; }
+      }
+      if (text == null) {
+        if (viaServer) { hint('Serwer rozpoznawania nie odpowiada, używam modelu w telefonie…'); loadModel((v) => { pct = v; status(); }).catch(() => {}); }
+        else status();
+        text = await transcribe(pcm);
+      }
       if (!text) { hint('Nie udało się rozpoznać mowy — spróbuj jeszcze raz.'); return; }
       putText(text);
       hint('Sprawdź podgląd i dotknij „Dodaj”.');
