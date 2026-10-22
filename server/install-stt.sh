@@ -20,7 +20,8 @@ if [ -z "$MODEL" ]; then
   if [ "$TOT_MB" -ge 7000 ] && [ "$MEM_MB" -ge 4000 ]; then MODEL=large-v3-turbo
   elif [ "$TOT_MB" -ge 3500 ] && [ "$MEM_MB" -ge 1800 ]; then MODEL=small; else MODEL=base; fi
 fi
-case "$MODEL" in large*|turbo) LIM=3000M;; small) LIM=1500M;; *) LIM=800M;; esac
+case "$MODEL" in large*|turbo) LIM=3000M;; small) LIM=1500M;; *) LIM=450M;; esac
+IDLE=$([ "$MODEL" = base ] && echo 120 || echo 1800)
 TH="$(nproc 2>/dev/null || echo 2)"; [ "$TH" -gt 4 ] && TH=4
 say "Pamięć: razem ${TOT_MB} MB, wolna ${MEM_MB} MB → model: $MODEL (limit usługi $LIM)"
 
@@ -50,7 +51,7 @@ Description=Kalendarz – rozpoznawanie mowy
 After=network-online.target
 [Service]
 User=$USR
-Environment=STT_MODEL=$MODEL STT_DIR=$STT/models STT_PORT=$PORT STT_THREADS=$TH HF_HOME=$STT/models
+Environment=STT_MODEL=$MODEL STT_DIR=$STT/models STT_PORT=$PORT STT_THREADS=$TH STT_IDLE=$IDLE HF_HOME=$STT/models
 ExecStart=$STT/venv/bin/python $STT/stt-server.py
 Restart=always
 RestartSec=5

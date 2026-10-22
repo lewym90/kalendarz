@@ -21,6 +21,9 @@ const cfg = {
   lateMs: +(process.env.LATE_MS || 2 * 3600000),   // alarmy spóźnione o więcej nie są wysyłane
   tickMs: +(process.env.TICK_MS || 15000),
   sttUrl: process.env.STT_URL || 'http://127.0.0.1:8791',
+  get groqKey() { return process.env.GROQ_API_KEY || ''; },
+  get groqUrl() { return process.env.GROQ_URL || 'https://api.groq.com/openai/v1/audio/transcriptions'; },
+  get groqModel() { return process.env.GROQ_MODEL || 'whisper-large-v3-turbo'; },
 };
 
 export const sha = (s) => crypto.createHash('sha256').update(s).digest('hex');
@@ -103,6 +106,24 @@ function readRaw(req, max) {
   });
 }
 
+const wavOf = (pcm) => {
+  const h = Buffer.alloc(44);
+  h.write('RIFF', 0); h.writeUInt32LE(36 + pcm.length, 4); h.write('WAVEfmt ', 8); h.writeUInt32LE(16, 16); h.writeUInt16LE(1, 20); h.writeUInt16LE(1, 22);
+  h.writeUInt32LE(16000, 24); h.writeUInt32LE(32000, 28); h.writeUInt16LE(2, 32); h.writeUInt16LE(16, 34); h.write('data', 36); h.writeUInt32LE(pcm.length, 40);
+  return Buffer.concat([h, pcm]);
+};
+// Opcjonalnie: chmura (Groq, Whisper large-v3-turbo) — klucz tylko na serwerze, nigdy w aplikacji.
+async function sttCloud(raw, prompt) {
+  const f = new FormData();
+  f.append('file', new Blob([wavOf(raw)], { type: 'audio/wav' }), 'mowa.wav');
+  f.append('model', cfg.groqModel); f.append('language', 'pl'); f.append('temperature', '0'); f.append('response_format', 'json');
+  if (prompt) f.append('prompt', prompt);
+  const r = await fetch(cfg.groqUrl, { method: 'POST', headers: { Authorization: `Bearer ${cfg.groqKey}` }, body: f, signal: AbortSignal.timeout(30000) });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error((j.error && j.error.message) || `Groq ${r.status}`);
+  return String(j.text || '').trim();
+}
+
 // Rozpoznawanie mowy: aplikacja wysyła próbki PCM, serwer przekazuje je do lokalnej usługi kalendarz-stt (jeśli zainstalowana).
 export async function handleStt(req) {
   const u = new URL(req.url, 'http://x');
@@ -110,6 +131,7 @@ export async function handleStt(req) {
   const tok = (req.headers.authorization || '').replace(/^Bearer\s+/i, '');
   const dev = validId(id) ? db.devices[id] : null;
   if (!dev || !tok || !safeEq(sha(tok), dev.tokenHash)) return [401, { error: 'brak uprawnień' }];
+  if (u.searchParams.get('warm') && cfg.groqKey) { req.resume(); return [200, { ok: true, cloud: true }]; }
   if (u.searchParams.get('warm')) {
     // rozgrzanie modelu na czas nagrywania (odpowiedź nie czeka na wynik)
     http.get(`${cfg.sttUrl}/warm`, { timeout: 3000 }, (r2) => r2.resume()).on('error', () => {}).on('timeout', function () { this.destroy(); });
@@ -119,6 +141,9 @@ export async function handleStt(req) {
   const raw = await readRaw(req, 1_200_000);
   if (raw.length < 3200) return [400, { error: 'za krótkie nagranie' }];
   const prompt = (u.searchParams.get('p') || '').slice(0, 400);
+  if (cfg.groqKey) {
+    try { return [200, { text: await sttCloud(raw, prompt), via: 'cloud' }]; } catch (e) { log('stt chmura:', e.message); /* spadamy na usługę lokalną */ }
+  }
   return new Promise((resolve) => {
     const r = http.request(`${cfg.sttUrl}/transcribe?p=${encodeURIComponent(prompt)}`, { method: 'POST', headers: { 'Content-Length': raw.length }, timeout: 90000 }, (res2) => {
       const ch = []; res2.on('data', (c) => ch.push(c));
