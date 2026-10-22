@@ -9,7 +9,7 @@ from urllib.parse import urlparse, parse_qs
 import numpy as np
 
 MODEL_NAME = os.environ.get('STT_MODEL', 'small')
-IDLE = int(os.environ.get('STT_IDLE', '600'))
+IDLE = int(os.environ.get('STT_IDLE', '1800'))
 THREADS = int(os.environ.get('STT_THREADS', '2'))
 DIR = os.environ.get('STT_DIR', '/opt/kalendarz/stt/models')
 PORT = int(os.environ.get('STT_PORT', '8791'))
@@ -51,6 +51,15 @@ class H(BaseHTTPRequestHandler):
         self.wfile.write(b)
 
     def do_GET(self):
+        global last
+        if urlparse(self.path).path == '/warm':
+            def w():
+                global last
+                with lock:
+                    get_model()
+                    last = time.time()
+            threading.Thread(target=w, daemon=True).start()
+            return self.send(200, {'ok': True})
         if urlparse(self.path).path == '/health':
             return self.send(200, {'ok': True, 'model': MODEL_NAME, 'loaded': model is not None})
         self.send(404, {'error': 'nie znaleziono'})
@@ -69,8 +78,8 @@ class H(BaseHTTPRequestHandler):
         try:
             with lock:
                 m = get_model()
-                segs, _ = m.transcribe(audio, language='pl', beam_size=5, vad_filter=True, condition_on_previous_text=False,
-                                       initial_prompt=prompt or None)
+                segs, _ = m.transcribe(audio, language='pl', beam_size=1, best_of=1, temperature=0.0, vad_filter=True, without_timestamps=True,
+                                       condition_on_previous_text=False, initial_prompt=prompt or None)
                 text = ' '.join(s.text.strip() for s in segs).strip()
                 last = time.time()
             self.send(200, {'text': text})

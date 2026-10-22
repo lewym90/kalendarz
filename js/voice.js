@@ -105,7 +105,7 @@ export async function warm() {
 
 // Nagrywanie z automatycznym zakończeniem po ciszy. Próbki PCM pobieramy wprost z mikrofonu (bez kodeków),
 // co działa tak samo na iPhonie i w przeglądarce. Zwraca { stop, done: Promise<{ pcm: Float32Array (16 kHz), heard }> }
-export async function record({ onLevel, maxMs = 30000, silenceMs = 1600 } = {}) {
+export async function record({ onLevel, maxMs = 30000, silenceMs = 1100 } = {}) {
   const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
   const AC = window.AudioContext || window.webkitAudioContext;
   const ctx = new AC();

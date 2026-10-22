@@ -137,6 +137,11 @@ export function agendaPayload(now = new Date()) {
 
 // Rozpoznawanie mowy na serwerze (usługa kalendarz-stt). Próbki 16 kHz → int16, token w nagłówku.
 export const sttAvailable = () => { const c = read(); return !!(c && c.token && c.url && c.deviceId); };
+export function sttWarm() {
+  const cfg = read();
+  if (!cfg || !cfg.token) return;
+  fetch(`${cfg.url}/stt?warm=1&d=${encodeURIComponent(cfg.deviceId)}`, { method: 'POST', headers: { Authorization: `Bearer ${cfg.token}`, 'Content-Type': 'application/octet-stream' }, body: new Uint8Array(0) }).catch(() => {});
+}
 export async function sttTranscribe(pcm, prompt = '') {
   const cfg = read();
   if (!cfg || !cfg.token) throw new Error('brak połączenia z serwerem');

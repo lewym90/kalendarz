@@ -11,7 +11,7 @@ import { instancesInRange, describeRule, eventSpan } from './recur.js';
 import { openSheet, closeSheet, toast, rerender, confirmSheet, nav } from './ui.js';
 import { searchCity } from './weather.js';
 import { findSlots } from './planner.js';
-import { sttAvailable, sttTranscribe } from './push.js';
+import { sttAvailable, sttTranscribe, sttWarm } from './push.js';
 
 const REMIND_OPTS = [0, 5, 10, 15, 30, 60, 120, 1440, 2880];
 export const shortRemind = (m) => (m === 0 ? 'o starcie' : m < 60 ? `${m} min` : m < 1440 ? `${m / 60} godz.` : m === 1440 ? '1 dzień' : `${m / 1440} dni`);
@@ -278,7 +278,7 @@ export function openQuickAdd({ text = '', mode = 'event', ctxDate = null } = {})
   };
   const voicePrompt = () => {
     const titles = Object.values(state.history).sort((a, b) => b.n - a.n).slice(0, 8).map((x) => x.title);
-    return `Siłownia w piątek o 16. Dentysta jutro o 9:30. Kup mleko. ${titles.join('. ')}`.trim();
+    return `Siłownia w piątek o 16. Wizyta u lekarza piątego listopada o 15:30. Dentysta jutro o 9:30. Kup mleko. ${titles.join('. ')}`.trim();
   };
   const startWhisper = async () => {
     haptic();
@@ -299,6 +299,7 @@ export function openQuickAdd({ text = '', mode = 'event', ctxDate = null } = {})
     }
     setListening(true);
     status();
+    if (viaServer) sttWarm();
     if (!viaServer) { ready = loadModel((v) => { pct = v; status(); }); ready.catch(() => {}); }
     input.blur();
     const sess = recSession;

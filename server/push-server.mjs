@@ -110,6 +110,12 @@ export async function handleStt(req) {
   const tok = (req.headers.authorization || '').replace(/^Bearer\s+/i, '');
   const dev = validId(id) ? db.devices[id] : null;
   if (!dev || !tok || !safeEq(sha(tok), dev.tokenHash)) return [401, { error: 'brak uprawnień' }];
+  if (u.searchParams.get('warm')) {
+    // rozgrzanie modelu na czas nagrywania (odpowiedź nie czeka na wynik)
+    http.get(`${cfg.sttUrl}/warm`, { timeout: 3000 }, (r2) => r2.resume()).on('error', () => {}).on('timeout', function () { this.destroy(); });
+    req.resume();
+    return [200, { ok: true }];
+  }
   const raw = await readRaw(req, 1_200_000);
   if (raw.length < 3200) return [400, { error: 'za krótkie nagranie' }];
   const prompt = (u.searchParams.get('p') || '').slice(0, 400);
