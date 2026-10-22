@@ -115,6 +115,43 @@ await t('wspólny kalendarz: publikacja, odczyt, prywatność, ten sam autor pom
   await call('POST', '/sync', { deviceId: A, alarms: [], share: null }, ta);
   assert.equal((await call('POST', '/peers', { deviceId: B }, tb))[1].peers.length, 0, 'wyłączenie udostępniania usuwa dane');
 });
+await t('powiadomienia o nowych wpisach drugiej osoby', async () => {
+  const mk = async (id, ep) => (await call('POST', '/subscribe', { deviceId: id, setup: 'KOD123', subscription: { endpoint: ep, keys: { p256dh: 'p', auth: 'a' } } }))[1].token;
+  const MA = 'marek_device_0123456789', OA = 'ola_device_0123456789a';
+  const ta = await mk(MA, 'https://push.example/ma'), tb = await mk(OA, 'https://push.example/oa');
+  const mine = () => sent.filter((x) => x.sub.endpoint === 'https://push.example/ma');
+  const day = (n) => new Date(Date.now() + n * 86400000).toLocaleDateString('sv-SE', { timeZone: 'Europe/Warsaw' });
+  const ev = (d, t, extra = {}) => ({ d, s: '19:00', ed: d, e: '20:00', ad: 0, p: 0, t, l: '', ...extra });
+  const share = (name, events) => ({ name, color: '#34d3ff', events });
+  await call('POST', '/sync', { deviceId: MA, alarms: [], share: share('Marek', [ev(day(2), 'Siłownia')]) }, ta);
+  await call('POST', '/sync', { deviceId: OA, alarms: [], share: share('Ola', [ev(day(3), 'Joga')]), np: true }, tb);
+  sent.length = 0;
+  await S.flushPeerNotes(Date.now() + 120000); assert.equal(mine().length, 0, 'pierwsza synchronizacja nie powiadamia');
+  // Ola dodaje: nowe wydarzenie, to samo z innym czasem (edycja), cykliczne z tym samym tytułem, przeszłe, prywatne
+  await call('POST', '/sync', { deviceId: OA, alarms: [], share: share('Ola', [ev(day(3), 'Joga'), ev(day(5), 'Kino'), ev(day(4), 'Joga', { s: '18:00' }), ev(day(-3), 'Dawne'), ev(day(6), '', { p: 1 })]), np: true }, tb);
+  await S.flushPeerNotes(Date.now() + 1000); assert.equal(mine().length, 0, 'najpierw odczekanie (grupowanie)');
+  await S.flushPeerNotes(Date.now() + 120000);
+  assert.equal(mine().length, 1); assert.equal(sent.filter((x) => x.sub.endpoint === 'https://push.example/oa').length, 0, 'autor nie dostaje własnych'); const pl = mine()[0].payload;
+  assert.match(pl.title, /^Ola: 2 nowe wydarzenia$/); assert.match(pl.body, /Kino, Zajęty termin/); assert.ok(!pl.body.includes('Dawne') && !pl.body.includes('Joga'));
+  assert.ok(pl.url.startsWith('./?day='));
+  // pojedyncze, z godziną i dniem tygodnia
+  sent.length = 0;
+  await call('POST', '/sync', { deviceId: OA, alarms: [], share: share('Ola', [ev(day(3), 'Joga'), ev(day(5), 'Kino'), ev(day(4), 'Joga', { s: '18:00' }), ev(day(6), '', { p: 1 }), ev(day(7), 'Obiad')]), np: true }, tb);
+  await S.flushPeerNotes(Date.now() + 120000);
+  assert.equal(mine()[0].payload.title, 'Ola: nowe wydarzenie'); assert.match(mine()[0].payload.body, /^Obiad · (pon|wt|śr|czw|pt|sob|ndz) \d\d\.\d\d 19:00$/);
+  // wyłączone u odbiorcy
+  sent.length = 0;
+  await call('POST', '/sync', { deviceId: MA, alarms: [], share: share('Marek', [ev(day(2), 'Siłownia')]), np: false }, ta);
+  await call('POST', '/sync', { deviceId: OA, alarms: [], share: share('Ola', [ev(day(8), 'Zakupy'), ev(day(7), 'Obiad')]), np: true }, tb);
+  await S.flushPeerNotes(Date.now() + 120000);
+  assert.equal(mine().length, 0, 'odbiorca z wyłączonym powiadamianiem nic nie dostaje');
+  // odległy horyzont nie powiadamia
+  await call('POST', '/sync', { deviceId: MA, alarms: [], share: share('Marek', [ev(day(2), 'Siłownia')]), np: true }, ta);
+  await call('POST', '/sync', { deviceId: OA, alarms: [], share: share('Ola', [ev(day(8), 'Zakupy'), ev(day(7), 'Obiad'), ev(day(115), '', { p: 1 })]), np: true }, tb);
+  await S.flushPeerNotes(Date.now() + 120000);
+  assert.equal(mine().length, 0, 'okno 100 dni');
+  await call('POST', '/unsubscribe', { deviceId: MA }, ta); await call('POST', '/unsubscribe', { deviceId: OA }, tb);
+});
 await t('rozpoznawanie mowy: autoryzacja i przekazanie', async () => {
   const pcm = Buffer.alloc(32000);
   const SID = 'stt_device_0123456789ab';

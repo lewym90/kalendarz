@@ -13,6 +13,7 @@ Osobiste centrum dowodzenia: kalendarz, zadania i automatyzacje w jednej aplikac
 - Dodawanie zdaniem po polsku: „jutro 17 siłownia", „co drugi wtorek 9:30 dentysta @Mokotów", „urodziny Ani 14 marca"
 - Dodawanie głosem: mikrofon w oknie dodawania (lub mikrofon klawiatury iPhone’a), np. „dodaj do kalendarza wizyta u lekarza trzeciego listopada o 17”; kilka pozycji w jednym zdaniu, także zadania („kup dziś mleko, jutro znajdź opony”); mikrofon nagrywa i rozpoznaje mowę w samej aplikacji (model Whisper, ~80 MB pobierany raz, potem także offline), bez klawiatury; rozpoznany tekst jest poprawiany słownikiem (siłownia, lekarz…) i Twoimi wpisami; dokładne rozpoznawanie na serwerze (faster-whisper, `server/install-stt.sh`), a gdy serwer nie odpowiada — model w telefonie; najpierw podgląd, potem „Dodaj”
 - Szybkie dodawanie: panel ustawień dotykiem (data, godzina, czas trwania, powtarzanie, przypomnienie, kategoria, miejsce) działa razem ze zdaniem; ostrzeżenie o nakładaniu się z „Wolny termin”, „Ostatnio dodawane” pamiętają godzinę i długość, „Dodaj i kolejne”
+- Wspólny kalendarz: powiadomienie push, gdy druga osoba doda wydarzenie (grupowane, prywatne jako „Zajęty termin”, przełącznik w Centrum)
 - Widoki: Dziś, miesiąc, tydzień, dzień (przeciąganie i zmiana długości), agenda
 - Wydarzenia cykliczne, kategorie, zadania z przenoszeniem zaległych na dziś
 - Reguły: „jeśli kategoria Praca, przypomnij 30 minut wcześniej"

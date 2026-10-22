@@ -192,10 +192,12 @@ export async function pushSync(force = false) {
   const alarms = state.settings.notifyEnabled ? alarmsPayload() : [];
   const agenda = agendaPayload();
   const share = sharePayload();
-  const sig = JSON.stringify([alarms, agenda, share]);
+  const shs = state.settings.share || {};
+  const np = !!(shs.on && shs.view && shs.notify !== false);
+  const sig = JSON.stringify([alarms, agenda, share, np]);
   if (!force && sig === lastSig) return true;
   try {
-    const res = await api(cfg, '/sync', { deviceId: cfg.deviceId, alarms, agenda, share });
+    const res = await api(cfg, '/sync', { deviceId: cfg.deviceId, alarms, agenda, share, np });
     lastSig = sig; retries = 0;
     if (res.widget) cfg.widget = res.widget;
     cfg.syncedAt = Date.now(); cfg.error = '';

@@ -406,11 +406,18 @@ setHandlers({
   banner: (a) => showBanner(a, { onOpen: openAlarm, onSnooze: (x) => { snooze(x, 10); toast('Przypomnę za 10 minut'); } }),
 });
 
+function openDay(d) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return;
+  nav.selected = startOfDay(parseYmd(d)); nav.cursor = nav.selected; nav.tab = 'cal'; nav.calView = 'day';
+  render();
+}
+
 function handleLaunchParams() {
   const q = new URLSearchParams(location.search);
   if (q.get('new')) { setTimeout(() => openQuickAdd({ mode: q.get('new') === 'task' ? 'task' : 'event' }), 250); }
   if (q.get('alarm')) { const id = q.get('alarm'); openAlarm({ id, kind: id[0] === 'e' ? 'event' : id[0] === 't' ? 'task' : 'brief' }); }
-  if (q.has('new') || q.has('alarm')) history.replaceState({}, '', location.pathname);
+  if (q.get('day')) openDay(q.get('day'));
+  if (q.has('new') || q.has('alarm') || q.has('day')) history.replaceState({}, '', location.pathname);
 }
 
 let lastDay = ymd(new Date());
@@ -498,6 +505,8 @@ if ('serviceWorker' in navigator) {
     if (e.data?.type === 'alarm') {
       const id = new URL(e.data.url, location.href).searchParams.get('alarm') || '';
       if (id) openAlarm({ id, kind: id[0] === 'e' ? 'event' : id[0] === 't' ? 'task' : 'brief' });
+      const day = new URL(e.data.url, location.href).searchParams.get('day');
+      if (day) openDay(day);
     }
   });
 }

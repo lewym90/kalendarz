@@ -204,6 +204,50 @@ export function cleanShare(a) {
   return { name, color: /^#[0-9a-fA-F]{6}$/.test(a.color || '') ? a.color : '#34d3ff', events, gen: Date.now() };
 }
 
+// ---------- Powiadomienia o nowych wpisach drugiej osoby ----------
+const pend = new Map(); // senderId -> { name, groups: Map(tytuł -> pierwsze wydarzenie), due }
+const WD = ['ndz', 'pon', 'wt', 'śr', 'czw', 'pt', 'sob'];
+const warsawToday = (now = Date.now()) => new Date(now).toLocaleDateString('sv-SE', { timeZone: 'Europe/Warsaw' });
+const evKey = (e) => `${e.d}|${e.s}|${e.ed}|${e.e}|${e.ad}|${e.p}|${e.t}`;
+const whenTxt = (e) => { const [y, m, d] = e.d.split('-').map(Number); return `${WD[new Date(Date.UTC(y, m - 1, d)).getUTCDay()]} ${String(d).padStart(2, '0')}.${String(m).padStart(2, '0')}${e.ad ? ', cały dzień' : e.s ? ' ' + e.s : ''}`; };
+const plural = (n) => (n === 1 ? 'nowe wydarzenie' : n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 10 || n % 100 > 20) ? 'nowe wydarzenia' : 'nowych wydarzeń');
+
+// Nowe = brak w poprzedniej liście i brak wpisu o tym samym tytule (przesunięcie/edycja nie liczy się), tylko przyszłe i bliższe niż 100 dni
+// (dalszy horyzont przesuwa się codziennie wraz z oknem synchronizacji). Pierwsza synchronizacja nie powiadamia.
+export function noteNewShared(senderId, prev, next, now = Date.now()) {
+  if (!prev || !Array.isArray(prev.events) || !next || prev.name.toLowerCase() !== next.name.toLowerCase()) return 0;
+  const today = warsawToday(now);
+  const limit = warsawToday(now + 100 * 86400000);
+  const keys = new Set(prev.events.map(evKey));
+  const titles = new Set(prev.events.filter((e) => e.t).map((e) => e.t));
+  const fresh = next.events.filter((e) => e.d >= today && e.d <= limit && !keys.has(evKey(e)) && !(e.t && titles.has(e.t)));
+  if (!fresh.length) return 0;
+  const p = pend.get(senderId) || { name: next.name, groups: new Map(), due: now + 45000 };
+  p.name = next.name;
+  for (const e of fresh) { const g = e.t || '\u0000prywatne'; if (!p.groups.has(g)) p.groups.set(g, e); }
+  pend.set(senderId, p);
+  return fresh.length;
+}
+
+export async function flushPeerNotes(now = Date.now()) {
+  let sent = 0;
+  for (const [sid, p] of [...pend]) {
+    if (p.due > now) continue;
+    pend.delete(sid);
+    const items = [...p.groups.entries()];
+    const [t0, e0] = items[0];
+    const label = (t, e) => (t.startsWith('\u0000') ? 'Zajęty termin' : t || 'Zajęty termin') + (e ? '' : '');
+    const title = items.length === 1 ? `${p.name}: nowe wydarzenie` : `${p.name}: ${items.length} ${plural(items.length)}`;
+    const body = items.length === 1 ? `${label(t0)} · ${whenTxt(e0)}` : items.slice(0, 3).map(([t]) => label(t)).join(', ') + (items.length > 3 ? '…' : '');
+    for (const [rid, rdev] of Object.entries(db.devices)) {
+      if (rid === sid || !rdev.sub || !rdev.share || rdev.np === false) continue;
+      if (rdev.share.name.toLowerCase() === p.name.toLowerCase()) continue;
+      if (await sendTo(rid, rdev, { id: `peer:${sha(sid).slice(0, 8)}:${now}`, title, body, tag: `peer-${sha(sid).slice(0, 8)}`, url: `./?day=${e0.d}` })) sent++;
+    }
+  }
+  return sent;
+}
+
 export async function handle(method, url, headers, body) {
   const route = url.split('?')[0].replace(/\/+$/, '') || '/';
   if (method === 'GET' && route === '/health') return [200, { ok: true, devices: Object.keys(db.devices).length }];
@@ -245,7 +289,8 @@ export async function handle(method, url, headers, body) {
     const ag = cleanAgenda(body.agenda);
     if (ag) dev.agenda = ag;
     if (body.share === null) delete dev.share;
-    else if (body.share) { const sh = cleanShare(body.share); if (sh) dev.share = sh; }
+    else if (body.share) { const sh = cleanShare(body.share); if (sh) { noteNewShared(id, dev.share, sh, now); dev.share = sh; } }
+    if (typeof body.np === 'boolean') dev.np = body.np;
     if (!dev.wtoken) dev.wtoken = crypto.randomBytes(24).toString('base64url');
     dev.sync = now; touch(); saveDb();
     return [200, { ok: true, queued: dev.alarms.length, widget: dev.wtoken }];
@@ -289,7 +334,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   loadDb();
   const srv = createServer();
   srv.listen(cfg.port, cfg.host, () => log(`Kalendarz push: ${cfg.host}:${cfg.port}, urządzeń: ${Object.keys(db.devices).length}`));
-  setInterval(() => runDue().catch((e) => log('tick', e.message)), cfg.tickMs);
+  setInterval(() => { runDue().catch((e) => log('tick', e.message)); flushPeerNotes().catch((e) => log('peer', e.message)); }, cfg.tickMs);
   const bye = () => { try { if (dirty) saveDb(); } catch (_) { /* nic */ } process.exit(0); };
   process.on('SIGTERM', bye); process.on('SIGINT', bye);
 }

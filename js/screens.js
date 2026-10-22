@@ -761,6 +761,7 @@ function shareSection() {
       <div class="row" style="flex-wrap:wrap"><span class="rt"><b>Mój kolor</b></span><div class="chips">${SHARE_COLORS.map((c) => `<button type="button" class="chip ${sh.color === c ? 'on' : ''}" style="padding:0;width:34px;justify-content:center;background:${c}" data-act="share-color" data-v="${c}" aria-label="Kolor ${c}">${sh.color === c ? `<span class="ico" style="color:#fff">${ICON.check}</span>` : ''}</button>`).join('')}</div></div>
       <div class="row"><span class="ico">${ICON.cal}</span><span class="rt"><b>Udostępniaj mój kalendarz</b><small>Inni zobaczą Twoje wydarzenia (prywatne jako „Zajęte")</small></span>${sw('share.on', sh.on)}</div>
       <div class="row"><span class="ico">${ICON.today}</span><span class="rt"><b>Pokaż kalendarz drugiej osoby</b><small>${sub}</small></span>${sw('share.view', sh.view)}</div>
+      <div class="row"><span class="ico">${ICON.bell}</span><span class="rt"><b>Powiadamiaj o jej wpisach</b><small>${sh.view ? 'Gdy druga osoba doda wydarzenie, dostaniesz powiadomienie (też przy zamkniętej aplikacji).' : 'Działa po włączeniu podglądu kalendarza drugiej osoby.'}</small></span>${sw('share.notify', sh.notify !== false)}</div>
     </div></section>`;
 }
 

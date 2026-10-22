@@ -42,7 +42,7 @@ const DEFAULT_SETTINGS = {
   accentCustom: '',
   welcomed: false,
   autoLoc: true,
-  share: { on: true, view: false, name: '', color: '#34d3ff' },
+  share: { on: true, view: false, name: '', color: '#34d3ff', notify: true },
 };
 
 function fresh() {
