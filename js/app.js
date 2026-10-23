@@ -414,10 +414,10 @@ function openDay(d) {
 
 function handleLaunchParams() {
   const q = new URLSearchParams(location.search);
-  if (q.get('new')) { setTimeout(() => openQuickAdd({ mode: q.get('new') === 'task' ? 'task' : 'event' }), 250); }
+  if (q.get('new')) { setTimeout(() => openQuickAdd({ mode: q.get('new') === 'task' ? 'task' : 'event', text: (q.get('text') || '').slice(0, 300) }), 250); }
   if (q.get('alarm')) { const id = q.get('alarm'); openAlarm({ id, kind: id[0] === 'e' ? 'event' : id[0] === 't' ? 'task' : 'brief' }); }
   if (q.get('day')) openDay(q.get('day'));
-  if (q.has('new') || q.has('alarm') || q.has('day')) history.replaceState({}, '', location.pathname);
+  if (q.has('new') || q.has('text') || q.has('alarm') || q.has('day')) history.replaceState({}, '', location.pathname);
 }
 
 let lastDay = ymd(new Date());
