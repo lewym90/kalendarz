@@ -25,8 +25,20 @@ function whenLabel(start, now) {
   return `${relDay(start, now)}, ${fmtTime(start)}`;
 }
 
+// Wydarzenia drugiej osoby (wspólny kalendarz) wchodzą do podsumowań i licznika tak samo jak własne; źródło rejestruje peers.js.
+let extraEvents = () => [];
+export function setExtraEvents(f) { extraEvents = f; }
+const allEvents = () => { const x = extraEvents(); return x.length ? state.events.concat(x) : state.events; };
+
+export function briefTasks(kind, now = new Date()) {
+  const open = state.tasks.filter((t) => !t.done && t.due);
+  if (kind === 'weekly') { const mon = startOfWeek(addDays(startOfDay(now), 1), 1); return open.filter((t) => t.due >= ymd(mon) && t.due < ymd(addDays(mon, 7))).length; }
+  const day = kind === 'evening' ? addDays(startOfDay(now), 1) : startOfDay(now);
+  return open.filter((t) => t.due <= ymd(day)).length;
+}
+
 export function briefFor(kind, now = new Date()) {
-  const events = state.events;
+  const events = allEvents();
   const fmtList = (list, max = 3) => list.slice(0, max).map((i) => (i.allDay ? i.title : `${fmtTime(i.start)} ${i.title}`)).join(', ') + (list.length > max ? ` i ${list.length - max} więcej` : '');
   if (kind === 'weekly') {
     const mon = startOfWeek(addDays(startOfDay(now), 1), 1);
@@ -151,7 +163,7 @@ export function badgeCount(now = new Date()) {
   const mode = state.settings.badge;
   if (mode === 'off') return 0;
   const day = startOfDay(now);
-  const inst = instancesInRange(state.events, day, addDays(day, 1)).filter((i) => i.allDay || i.end > now);
+  const inst = instancesInRange(allEvents(), day, addDays(day, 1)).filter((i) => i.allDay || i.end > now);
   let n = inst.length;
   if (mode === 'all') n += state.tasks.filter((t) => !t.done && t.due && t.due <= ymd(day)).length;
   return n;

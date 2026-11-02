@@ -1,6 +1,7 @@
 // Wspólny kalendarz: wpisy drugiej osoby (tylko do odczytu), pobierane z Twojego serwera.
 import { state } from './store.js';
 import { pushConfig, pushApi } from './push.js';
+import { setExtraEvents } from './notify.js';
 
 const KEY = 'kalendarz.peers';
 let cache = { list: [], at: 0 };
@@ -28,6 +29,8 @@ export function peerEvents() {
   built = { src: cache, out };
   return out;
 }
+
+setExtraEvents(peerEvents);
 
 let busy = false;
 export async function fetchPeers() {

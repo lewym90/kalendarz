@@ -152,6 +152,20 @@ await t('powiadomienia o nowych wpisach drugiej osoby', async () => {
   assert.equal(mine().length, 0, 'okno 100 dni');
   await call('POST', '/unsubscribe', { deviceId: MA }, ta); await call('POST', '/unsubscribe', { deviceId: OA }, tb);
 });
+await t('brief liczony przy wysyłce: wydarzenia drugiej osoby wchodzą do podsumowania', async () => {
+  const at = Date.parse('2026-11-02T05:30:00Z'); // 06:30 w Warszawie
+  const mk = (i) => `2026-11-${String(2 + i).padStart(2, '0')}`;
+  const ag = { days: Array.from({ length: 8 }, (_, i) => ({ d: mk(i), items: [] })) };
+  ag.days[1].items.push({ k: 'e', s: '16:20', e: '18:00', ad: 0, t: 'Własne', w: '' });
+  const me = { agenda: ag, share: { name: 'Ja', gen: 1, events: [] } };
+  const her = { share: { name: 'Ona', gen: 2, events: [{ d: '2026-11-02', s: '08:15', ed: '2026-11-02', e: '09:15', ad: 0, t: 'Neurolog', p: 0 }, { d: '2026-11-03', s: '10:00', ed: '2026-11-03', e: '11:00', ad: 0, t: '', p: 1 }] } };
+  const devs = { a: me, b: her };
+  assert.equal(S.briefBody(me, { br: 'morning', at, tk: 0, pv: 1 }, devs), 'Dziś: 1 wydarzenie. 08:15 Neurolog');
+  assert.equal(S.briefBody(me, { br: 'morning', at, tk: 2, pv: 0 }, devs), 'Dziś: bez wydarzeń. Zadań do zrobienia: 2');
+  assert.equal(S.briefBody(me, { br: 'evening', at: at + 14 * 3600000, tk: 0, pv: 1 }, devs), 'Jutro: 2 wydarzenia. 10:00 Zajęte, 16:20 Własne');
+  assert.match(S.briefBody(me, { br: 'weekly', at: Date.parse('2026-11-01T17:00:00Z'), tk: 1, pv: 1 }, devs), /^Przed Tobą 3 wydarzeń i 1 zadań\./);
+  assert.equal(S.briefBody({ ...me, agenda: { days: [] } }, { br: 'morning', at, pv: 1 }, devs), null);
+});
 await t('rozpoznawanie mowy: autoryzacja i przekazanie', async () => {
   const pcm = Buffer.alloc(32000);
   const SID = 'stt_device_0123456789ab';

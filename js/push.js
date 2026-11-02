@@ -2,8 +2,8 @@
 import { state, onChange, catOf } from './store.js';
 import { instancesInRange } from './recur.js';
 import { ymd, startOfDay, addDays, pad } from './util.js';
-import { computeAlarms, briefFor, notifPermission } from './notify.js';
-import { peerEvents } from './peers.js';
+import { computeAlarms, briefFor, briefTasks, notifPermission } from './notify.js';
+import { peerEvents, peersOn } from './peers.js';
 
 const KEY = 'kalendarz.push';
 const read = () => { try { return JSON.parse(localStorage.getItem(KEY)) || null; } catch (_) { return null; } };
@@ -89,7 +89,10 @@ export function alarmsPayload(now = new Date()) {
     .slice(0, 500)
     .map((a) => {
       const t = a.kind === 'brief' ? briefFor(a.brief, a.at) : a;
-      return { id: a.id, at: a.at.getTime(), title: t.title, body: t.body, tag: a.id, url: `./?alarm=${encodeURIComponent(a.id)}` };
+      const o = { id: a.id, at: a.at.getTime(), title: t.title, body: t.body, tag: a.id, url: `./?alarm=${encodeURIComponent(a.id)}` };
+      // Serwer składa treść podsumowania przy wysyłce (z wpisami drugiej osoby): potrzebuje rodzaju, liczby zadań i informacji o podglądzie.
+      if (a.kind === 'brief') { o.br = a.brief; o.tk = briefTasks(a.brief, a.at); o.pv = peersOn() ? 1 : 0; }
+      return o;
     });
 }
 

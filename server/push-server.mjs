@@ -63,6 +63,63 @@ export async function sendTo(id, dev, a) {
   }
 }
 
+
+// ---------- Poranny brief, podgląd jutra i przegląd tygodnia: treść liczona w chwili wysyłki ----------
+// Telefon wysyła gotowy tekst z góry (na 14 dni), więc wpis dodany później przez drugą osobę nie byłby w nim widoczny.
+// Dlatego serwer przy wysyłce składa treść od nowa: własne wydarzenia z ostatniej synchronizacji + aktualne wydarzenia
+// drugiej osoby (jeśli użytkownik ma włączony podgląd jej kalendarza). Gdy brakuje danych, zostaje tekst z telefonu.
+const addDay = (k, n) => { const [y, m, d] = k.split('-').map(Number); return new Date(Date.UTC(y, m - 1, d + n)).toISOString().slice(0, 10); };
+const warsawHm = (ms) => new Date(ms).toLocaleTimeString('en-GB', { timeZone: 'Europe/Warsaw', hour: '2-digit', minute: '2-digit', hour12: false });
+const WD_FULL = ['niedziela', 'poniedziałek', 'wtorek', 'środa', 'czwartek', 'piątek', 'sobota'];
+const nEv = (n) => (n === 1 ? 'wydarzenie' : n < 5 ? 'wydarzenia' : 'wydarzeń');
+
+export function briefBody(dev, a, devices = db.devices) {
+  try {
+    if (!dev.agenda || !Array.isArray(dev.agenda.days)) return null;
+    const base = warsawToday(a.at);
+    const first = a.br === 'evening' ? addDay(base, 1) : a.br === 'weekly' ? null : base;
+    let keys;
+    if (a.br === 'weekly') {
+      const t = addDay(base, 1);
+      const [y, m, d] = t.split('-').map(Number);
+      const dow = new Date(Date.UTC(y, m - 1, d)).getUTCDay();
+      const mon = addDay(t, -((dow + 6) % 7));
+      keys = Array.from({ length: 7 }, (_, i) => addDay(mon, i));
+    } else keys = [first];
+    const byDay = new Map(dev.agenda.days.map((x) => [x.d, x.items]));
+    if (!keys.every((k) => byDay.has(k))) return null;
+    const me = (dev.share && dev.share.name || '').toLowerCase();
+    const peers = [];
+    if (a.pv) {
+      const seen = new Set();
+      for (const d of Object.values(devices).filter((x) => x.share && x.share.name.toLowerCase() !== me).sort((x, y) => y.share.gen - x.share.gen)) {
+        const n = d.share.name.toLowerCase();
+        if (seen.has(n)) continue;
+        seen.add(n); peers.push(...d.share.events);
+      }
+    }
+    const forDay = (k) => {
+      const own = byDay.get(k).filter((i) => i.k === 'e' && !i.w).map((i) => ({ ad: i.ad, s: i.s, e: i.e, t: i.t }));
+      const oth = peers.filter((e) => e.d <= k && (e.ed || e.d) >= k).map((e) => ({ ad: e.ad, s: e.s, e: e.e, t: e.p ? 'Zajęte' : e.t || 'Wydarzenie' }));
+      return own.concat(oth).sort((x, y) => (y.ad ? 1 : 0) - (x.ad ? 1 : 0) || (x.s || '').localeCompare(y.s || ''));
+    };
+    if (a.br === 'weekly') {
+      const per = keys.map((k) => forDay(k).length);
+      const total = per.reduce((x, y) => x + y, 0);
+      if (!total) return 'Nadchodzący tydzień jest pusty. Dobry moment, żeby coś zaplanować.';
+      const [y, m, d] = keys[per.indexOf(Math.max(...per))].split('-').map(Number);
+      return `Przed Tobą ${total} wydarzeń i ${a.tk || 0} zadań. Najgęstszy dzień: ${WD_FULL[new Date(Date.UTC(y, m - 1, d)).getUTCDay()]}.`;
+    }
+    const nowHm = warsawHm(a.at);
+    let list = forDay(first);
+    if (a.br === 'morning') list = list.filter((i) => i.ad || !i.e || i.e > nowHm);
+    const label = a.br === 'evening' ? 'Jutro' : 'Dziś';
+    const head = list.length ? `${label}: ${list.length} ${nEv(list.length)}` : `${label}: bez wydarzeń`;
+    const names = list.slice(0, 3).map((i) => (i.ad ? i.t : `${i.s} ${i.t}`)).join(', ') + (list.length > 3 ? ` i ${list.length - 3} więcej` : '');
+    return [head, list.length ? names : '', a.tk ? `Zadań do zrobienia: ${a.tk}` : ''].filter(Boolean).join('. ');
+  } catch (_) { return null; }
+}
+
 export async function runDue(now = Date.now()) {
   let sent = 0;
   for (const [id, dev] of Object.entries(db.devices)) {
@@ -72,7 +129,7 @@ export async function runDue(now = Date.now()) {
     for (const a of due.slice(-3)) {
       dev.sent[a.id] = now;
       touch();
-      if (await sendTo(id, dev, a)) sent++;
+      if (await sendTo(id, dev, a.br ? { ...a, body: briefBody(dev, a) || a.body } : a)) sent++;
       if (!db.devices[id]) break;
     }
     due.slice(0, -3).forEach((a) => { dev.sent[a.id] = now; touch(); });
@@ -169,6 +226,7 @@ const validId = (s) => typeof s === 'string' && /^[A-Za-z0-9_-]{16,64}$/.test(s)
 const clean = (a) => ({
   id: String(a.id).slice(0, 120), at: Math.round(+a.at), title: String(a.title || '').slice(0, 140), body: String(a.body || '').slice(0, 300),
   tag: String(a.tag || a.id).slice(0, 120), url: String(a.url || './').slice(0, 200),
+  ...(a.br === 'morning' || a.br === 'evening' || a.br === 'weekly' ? { br: a.br, tk: Math.max(0, Math.min(999, Math.round(+a.tk) || 0)), pv: a.pv ? 1 : 0 } : {}),
 });
 
 const str = (v, n) => String(v == null ? '' : v).slice(0, n);
