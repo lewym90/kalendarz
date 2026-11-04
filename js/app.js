@@ -14,32 +14,25 @@ import { widgetLoaderScript, pushConfig, pushConnect, pushDisconnect, pushTest, 
 import { isStandalone } from './notify.js';
 import { tick, snooze, updateBadge, enableNotifications, testNotification, setHandlers, briefFor } from './notify.js';
 import { initLock, openLockSettings } from './lock.js';
-import { openFindSlot, openStats, importICS } from './tools.js';
-import { loadWeather, cachedWeather, rainInsight, weatherKind } from './weather.js';
+import { openFindSlot, importICS } from './tools.js';
+import { loadWeather, cachedWeather, weatherKind } from './weather.js';
+import { renderStats, renderAuto, renderShared } from './more.js';
+import { openAssistant, isCommand } from './ai.js';
+import { openBackup, openHistory, openBuffers, openPrefs } from './sheets.js';
+import { initBackup } from './backup.js';
+import { initSpace, onSpace, spaceSync, acceptInvite, declineInvite, addShared, patchShared, removeShared, clearBoughtShop, sharedList, me as myName } from './space.js';
 
 const view = $('#view');
 const dock = $('#dock');
 let weather = null;
 
-// ---------- Motyw ----------
-function applyTheme() {
-  const t = state.settings.theme;
-  const dark = t === 'auto' ? matchMedia('(prefers-color-scheme: dark)').matches : t === 'dark';
-  document.documentElement.dataset.theme = dark ? 'dark' : 'light';
-  document.documentElement.dataset.accent = state.settings.accent;
-  document.documentElement.dataset.skin = state.settings.skin || 'dusk';
-  const st = document.documentElement.style;
-  if (state.settings.accentCustom) { st.setProperty('--a1', state.settings.accentCustom); st.setProperty('--a2', 'color-mix(in oklab, ' + state.settings.accentCustom + ' 70%, #7a4dff)'); } else { st.removeProperty('--a1'); st.removeProperty('--a2'); }
-  requestAnimationFrame(() => document.querySelector('meta[name="theme-color"]')?.setAttribute('content', getComputedStyle(document.documentElement).getPropertyValue('--bg').trim() || (dark ? '#131029' : '#f1eff9')));
-}
-matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', applyTheme);
-
 // ---------- Dock ----------
 function renderDock() {
   const today = ymd(new Date());
   const due = state.tasks.filter((t) => !t.done && t.due && t.due <= today).length;
-  const tab = (k, label, icon, badge = 0) => `<button type="button" class="tab ${nav.tab === k ? 'on' : ''}" data-act="tab" data-tab="${k}" aria-label="${label}" ${nav.tab === k ? 'aria-current="page"' : ''}><span class="ico">${icon}</span>${label}${badge ? `<span class="badge">${badge > 9 ? '9+' : badge}</span>` : ''}</button>`;
-  dock.innerHTML = `${tab('today', 'Dziś', ICON.today)}${tab('cal', 'Kalendarz', ICON.cal)}<button type="button" class="fab" data-act="quick" aria-label="Dodaj wydarzenie lub zadanie"><span class="ico">${ICON.plus}</span></button>${tab('tasks', 'Zadania', ICON.tasks, due)}${tab('hub', 'Centrum', ICON.hub)}`;
+  const active = ['auto', 'stats', 'shared'].includes(nav.tab) ? nav.back : nav.tab;
+  const tab = (k, label, icon, badge = 0) => `<button type="button" class="tab ${active === k ? 'on' : ''}" data-act="tab" data-tab="${k}" aria-label="${label}" ${nav.tab === k ? 'aria-current="page"' : ''}><span class="ico">${icon}</span>${label}${badge ? `<span class="badge">${badge > 9 ? '9+' : badge}</span>` : ''}</button>`;
+  dock.innerHTML = `${tab('today', 'Dzisiaj', ICON.home)}${tab('cal', 'Kalendarz', ICON.cal)}<button type="button" class="fab" data-act="quick" aria-label="Dodaj wydarzenie lub zadanie"><span class="ico">${ICON.plus}</span></button>${tab('tasks', 'Zadania', ICON.tasks, due)}${tab('hub', 'Więcej', ICON.dots)}`;
 }
 
 // ---------- Renderowanie ----------
@@ -76,7 +69,7 @@ document.addEventListener('scroll', (e) => {
 function render() {
   const key = nav.tab + (nav.tab === 'cal' ? ':' + nav.calView : '');
   const scroll = view.scrollTop;
-  const html = nav.tab === 'today' ? renderToday() : nav.tab === 'cal' ? renderCal() : nav.tab === 'tasks' ? renderTasks() : renderHub();
+  const html = ({ today: renderToday, cal: renderCal, tasks: renderTasks, auto: renderAuto, stats: renderStats, shared: renderShared }[nav.tab] || renderHub)();
   const anim = key !== lastKey ? (lastKey ? 'tab' : '') : nextAnim;
   nextAnim = '';
   clearTimeout(animT);
@@ -89,7 +82,6 @@ function render() {
 
   if (nav.tab === 'today') {
     paintWeather(weather || cachedWeather());
-    extraInsights(weather || cachedWeather());
   }
   if (nav.tab === 'cal') {
     const head = $('#cal-head');
@@ -112,24 +104,20 @@ function render() {
 }
 setRender(render);
 
-function extraInsights(w) {
-  const box = $('#insights');
-  const r = rainInsight(w);
-  if (!box || !r || box.querySelector('[data-rain]')) return;
-  box.insertAdjacentHTML('beforeend', `<div class="insight" data-rain><span class="ico">${ICON.rain}</span><span>${esc(r)}</span></div>`);
-}
-
 async function locAndWeather(force = false) {
   const changed = await updateLocation();
   if (changed) { weather = null; render(); }
   return refreshWeather(force || changed);
 }
 
+let lastCode = cachedWeather()?.code;
 async function refreshWeather(force = false) {
   const w = await loadWeather(state.settings.city, force);
   if (w) {
+    const skyChanged = lastCode !== w.code;
+    lastCode = w.code;
     weather = w;
-    if (nav.tab === 'today') { paintWeather(w); extraInsights(w); }
+    if (nav.tab === 'today' && !sheetOpen()) { if (skyChanged) render(); else paintWeather(w); }
   }
   return w;
 }
@@ -191,12 +179,33 @@ function shiftCal(dir) {
 // ---------- Akcje ----------
 const actions = {
   tab(el) {
-    nav.tab = el.dataset.tab;
+    const to = el.dataset.tab;
+    if (['auto', 'stats', 'shared'].includes(to)) { if (!['auto', 'stats', 'shared'].includes(nav.tab)) nav.back = nav.tab === 'hub' ? 'hub' : 'today'; if (to === 'shared') spaceSync(); }
+    nav.tab = to;
     if (nav.tab === 'cal') { nav.cursor = nav.cursor || startOfDay(new Date()); needScroll = true; }
     saveNav();
     render();
   },
   quick() { haptic(); openQuickAdd(); },
+  'quick-task'() { haptic(); openQuickAdd({ mode: 'task' }); },
+  'cmd-mic'() { haptic(); openQuickAdd({ voice: true }); },
+  'ai-open'() { haptic(); openAssistant(); },
+  backup() { openBackup(); },
+  history() { openHistory(); },
+  buffers() { openBuffers(); },
+  prefs() { openPrefs(); },
+  statkind(el) { nav.statKind = el.dataset.v; haptic(); render(); },
+  'filter-toggle'() { nav.showFilter = !nav.showFilter; haptic(); render(); },
+  'filter-who'(el) { nav.filterWho = el.dataset.v; saveNav(); haptic(); render(); },
+  'filter-cat'(el) { const v = el.dataset.v; nav.filterCats = nav.filterCats.includes(v) ? nav.filterCats.filter((x) => x !== v) : [...nav.filterCats, v]; saveNav(); haptic(); render(); },
+  'find-both'() { openFindSlot({ both: true }); },
+  'inv-yes'(el) { acceptInvite(el.dataset.id); haptic(); toast('Dodano do kalendarza'); render(); },
+  'inv-no'(el) { declineInvite(el.dataset.id); haptic(); render(); },
+  'sh-done'(el) { const it = [...sharedList('task'), ...sharedList('shop')].find((x) => x.id === el.dataset.id); if (it) { haptic(); patchShared(it.id, { done: !it.data.done, doneBy: myName() }, it.kind === 'task' && !it.data.done ? `Zrobione: ${it.data.title}` : undefined); render(); } },
+  'sh-del'(el) { removeShared(el.dataset.id); haptic(); render(); },
+  'shop-clear'() { clearBoughtShop(); render(); },
+  'sh-assign'(el) { nav.shAssign = el.dataset.v; render(); },
+  'my-color'(el) { state.settings.share.color = el.dataset.v; haptic(); save(); },
   'quick-text'(el) { haptic(); openQuickAdd({ text: el.dataset.text }); },
   sample() { loadSample(); toast('Wczytano przykładowe dane'); },
   'open-ev'(el) {
@@ -204,7 +213,6 @@ const actions = {
     if (inst && inst.ev.peer) return openPeerSheet(inst);
     if (inst) openEventEditor({ inst });
   },
-  'share-color'(el) { haptic(); state.settings.share.color = el.dataset.v; save(); },
   'open-task'(el) { openTaskEditor({ id: el.dataset.id }); },
   'toggle-task'(el) {
     const id = el.dataset.id;
@@ -244,8 +252,6 @@ const actions = {
   set(el) {
     const v = el.dataset.num ? Number(el.dataset.v) : el.dataset.v;
     state.settings[el.dataset.k] = v;
-    if (el.dataset.k === 'accent') state.settings.accentCustom = '';
-    applyTheme();
     save();
   },
   'edit-cat'(el) { openCatEditor(el.dataset.id || null); },
@@ -288,7 +294,7 @@ const actions = {
   'export-ics'() { download(`kalendarz-${ymd(new Date())}.ics`, icsExport(), 'text/calendar'); },
   import() { const f = $('#file-in'); f.accept = 'application/json,.json'; f.click(); },
   'import-ics'() { const f = $('#file-in'); f.accept = '.ics,text/calendar'; f.click(); },
-  stats() { openStats(); },
+  stats() { nav.back = 'hub'; nav.tab = 'stats'; render(); },
   'lock-setup'() { openLockSettings(); },
   'find-slot'() { openFindSlot(); },
   async wipe() {
@@ -308,7 +314,6 @@ document.addEventListener('click', (e) => {
       const r = state.rules.find((x) => x.id === p.slice(5));
       if (r) r.on = !r.on;
     } else setPath(state.settings, p, !getPath(state.settings, p));
-    applyTheme();
     save();
     return;
   }
@@ -340,7 +345,6 @@ document.addEventListener('change', (e) => {
   if (t.dataset.arr) v = JSON.parse(v);
   else if (t.dataset.num) v = Number(v);
   setPath(state.settings, path, v);
-  applyTheme();
   save(true);
   settingsDirty = true;
 });
@@ -357,6 +361,26 @@ document.addEventListener('focusout', () => {
 });
 
 document.addEventListener('submit', (e) => {
+  if (e.target.id === 'cmd-form') {
+    e.preventDefault();
+    const i = $('#cmd-in');
+    const text = i.value.trim();
+    if (!text) return;
+    i.value = ''; i.blur();
+    if (isCommand(text)) openAssistant(text); else openQuickAdd({ text });
+    return;
+  }
+  const sh = e.target.dataset?.sh;
+  if (sh) {
+    e.preventDefault();
+    const i = e.target.querySelector('input');
+    const title = i.value.trim();
+    if (!title) return;
+    if (sh === 'shop') addShared('shop', { title, done: false }, `Lista zakupów: ${title}`);
+    else addShared('task', { title, done: false, assignee: nav.shAssign || null }, `Nowe zadanie: ${title}`);
+    haptic(); render();
+    return;
+  }
   if (e.target.id !== 'task-form') return;
   e.preventDefault();
   const input = $('#task-in');
@@ -417,7 +441,8 @@ function handleLaunchParams() {
   if (q.get('new')) { setTimeout(() => openQuickAdd({ mode: q.get('new') === 'task' ? 'task' : 'event', text: (q.get('text') || '').slice(0, 300) }), 250); }
   if (q.get('alarm')) { const id = q.get('alarm'); openAlarm({ id, kind: id[0] === 'e' ? 'event' : id[0] === 't' ? 'task' : 'brief' }); }
   if (q.get('day')) openDay(q.get('day'));
-  if (q.has('new') || q.has('text') || q.has('alarm') || q.has('day')) history.replaceState({}, '', location.pathname);
+  if (q.get('shared')) { nav.back = 'today'; nav.tab = 'shared'; render(); }
+  if (q.has('shared') || q.has('new') || q.has('text') || q.has('alarm') || q.has('day')) history.replaceState({}, '', location.pathname);
 }
 
 let lastDay = ymd(new Date());
@@ -449,7 +474,10 @@ document.addEventListener('visibilitychange', () => {
 });
 
 initPush();
-if (pushConfig()?.error && /rozpoznaje/.test(pushConfig().error)) setTimeout(() => toast('Serwer nie zna tego telefonu. Centrum, Połącz ponownie.', { ms: 7000 }), 2000);
+initBackup();
+initSpace();
+onSpace((msg) => { if (msg) toast(msg, { ms: 6000 }); if (!sheetOpen()) render(); });
+if (pushConfig()?.error && /rozpoznaje/.test(pushConfig().error)) setTimeout(() => toast('Serwer nie zna tego telefonu. Więcej, Połącz ponownie.', { ms: 7000 }), 2000);
 function openPeerSheet(inst) {
   const p = inst.ev.peer;
   const when = inst.allDay ? `${fmtDayLong(inst.start)}, cały dzień` : `${fmtDayLong(inst.start)}, ${fmtTime(inst.start)}–${fmtTime(inst.end)}`;
@@ -474,7 +502,6 @@ bindTray(view);
 
 // ---------- Start ----------
 nav.tab = 'today';
-applyTheme();
 initLock();
 rolloverTasks();
 render();
@@ -507,6 +534,7 @@ if ('serviceWorker' in navigator) {
       if (id) openAlarm({ id, kind: id[0] === 'e' ? 'event' : id[0] === 't' ? 'task' : 'brief' });
       const day = new URL(e.data.url, location.href).searchParams.get('day');
       if (day) openDay(day);
+      if (new URL(e.data.url, location.href).searchParams.get('shared')) { nav.back = 'today'; nav.tab = 'shared'; render(); spaceSync(); }
     }
   });
 }

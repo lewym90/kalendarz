@@ -4,17 +4,22 @@ import { uid, ymd, addDays, startOfDay, fmtDT, parseDT, parseYmd, fmtTime, pad }
 const KEY = 'kalendarz.v1';
 
 export const DEFAULT_CATS = [
-  { id: 'praca', name: 'Praca', color: '#7C9BFF' },
-  { id: 'dom', name: 'Dom', color: '#4FD1B0' },
-  { id: 'sport', name: 'Sport', color: '#FF8A5B' },
-  { id: 'zdrowie', name: 'Zdrowie', color: '#FF6B8B' },
-  { id: 'rodzina', name: 'Rodzina', color: '#C58BFF' },
-  { id: 'finanse', name: 'Finanse', color: '#F2C14E' },
-  { id: 'nauka', name: 'Nauka', color: '#5AC8FA' },
-  { id: 'inne', name: 'Inne', color: '#9AA3B8' },
+  { id: 'praca', name: 'Praca', color: '#2E8BFF' },
+  { id: 'dom', name: 'Dom', color: '#12E2C2' },
+  { id: 'sport', name: 'Sport', color: '#27E05F' },
+  { id: 'zdrowie', name: 'Zdrowie', color: '#FF3F7F' },
+  { id: 'rodzina', name: 'Rodzina', color: '#A45CFF' },
+  { id: 'finanse', name: 'Finanse', color: '#FFC400' },
+  { id: 'nauka', name: 'Nauka', color: '#19C8FF' },
+  { id: 'odpoczynek', name: 'Odpoczynek', color: '#FF8A1F' },
+  { id: 'inne', name: 'Inne', color: '#8999AE' },
 ];
 
-export const CAT_PALETTE = ['#7C9BFF', '#4FD1B0', '#FF8A5B', '#FF6B8B', '#C58BFF', '#F2C14E', '#5AC8FA', '#9AA3B8', '#8BE05A', '#FF5E5E'];
+// Żywe kolory osób (każde z Was wybiera swój) i dawne, mdłe kolory kategorii do zamiany przy starcie.
+export const PERSON_COLORS = ['#FF2D46', '#FF8A1F', '#FFC400', '#27E05F', '#12E2C2', '#19C8FF', '#2E8BFF', '#A45CFF', '#FF3FA4'];
+const OLD_CAT = { '#7C9BFF': '#2E8BFF', '#4FD1B0': '#12E2C2', '#FF8A5B': '#27E05F', '#FF6B8B': '#FF3F7F', '#C58BFF': '#A45CFF', '#F2C14E': '#FFC400', '#5AC8FA': '#19C8FF', '#9AA3B8': '#8999AE' };
+
+export const CAT_PALETTE = ['#2E8BFF', '#12E2C2', '#27E05F', '#FF3F7F', '#A45CFF', '#FFC400', '#19C8FF', '#FF8A1F', '#8999AE', '#FF2D46'];
 
 export const DEFAULT_RULES = [
   { id: 'r-praca', name: 'Praca: przypomnij pół godziny wcześniej', on: true, when: { cat: 'praca' }, then: { remind: [30] } },
@@ -24,8 +29,7 @@ export const DEFAULT_RULES = [
 ];
 
 const DEFAULT_SETTINGS = {
-  theme: 'auto',
-  accent: 'zorza',
+  displayName: '',
   weekStart: 1,
   defaultRemind: [10],
   badge: 'all', // off | events | all
@@ -38,11 +42,10 @@ const DEFAULT_SETTINGS = {
   dayStart: '07:00',
   dayEnd: '23:00',
   city: { name: 'Warszawa', lat: 52.2297, lon: 21.0122 },
-  skin: 'dusk',
-  accentCustom: '',
   welcomed: false,
   autoLoc: true,
-  share: { on: true, view: false, name: '', color: '#34d3ff', notify: true },
+  share: { on: true, view: false, name: '', color: '#2E8BFF', notify: true },
+  buffer: { def: 0, cats: {} },
 };
 
 function fresh() {
@@ -57,7 +60,19 @@ function fresh() {
     snoozes: [],
     history: {},
     lastRollover: '',
+    prefs: [],
+    prefsOff: [],
   };
+}
+
+// Dane z wcześniejszych wersji (także z kopii): żywe kolory kategorii i nowa kategoria Odpoczynek.
+export function migrate(st) {
+  for (const c of st.cats || []) { const n = OLD_CAT[String(c.color).toUpperCase()]; if (n) c.color = n; }
+  if (Array.isArray(st.cats) && !st.cats.some((c) => c.id === 'odpoczynek')) {
+    const i = st.cats.findIndex((c) => c.id === 'inne');
+    st.cats.splice(i < 0 ? st.cats.length : i, 0, DEFAULT_CATS.find((c) => c.id === 'odpoczynek'));
+  }
+  return st;
 }
 
 function load() {
@@ -66,11 +81,11 @@ function load() {
     const raw = localStorage.getItem(KEY);
     if (!raw) return base;
     const data = JSON.parse(raw);
-    return {
+    return migrate({
       ...base,
       ...data,
-      settings: { ...base.settings, ...(data.settings || {}) },
-    };
+      settings: { ...base.settings, ...(data.settings || {}), share: { ...base.settings.share, ...((data.settings || {}).share || {}) }, buffer: { ...base.settings.buffer, ...((data.settings || {}).buffer || {}) } },
+    });
   } catch (e) {
     console.warn('Nie udało się wczytać danych', e);
     return base;
@@ -105,9 +120,11 @@ export function flushSave() {
   } catch (_) { /* brak miejsca */ }
 }
 
-// Cofanie ostatniej zmiany (zdarzenia + zadania).
-let undoSnapshot = null;
+// Cofanie: stos do 30 ostatnich stanów (zdarzenia + zadania), tylko w pamięci.
+const UNDO_MAX = 30;
+const undoStack = [];
 let batching = false;
+const snapStr = () => JSON.stringify({ events: state.events, tasks: state.tasks });
 export function batch(fn) {
   snapshot();
   batching = true;
@@ -115,16 +132,61 @@ export function batch(fn) {
 }
 export function snapshot() {
   if (batching) return;
-  undoSnapshot = JSON.stringify({ events: state.events, tasks: state.tasks });
+  const json = snapStr();
+  const top = undoStack[undoStack.length - 1];
+  if (top && top.json === json) return;
+  undoStack.push({ json, at: Date.now() });
+  if (undoStack.length > UNDO_MAX) undoStack.shift();
 }
 export function undo() {
-  if (!undoSnapshot) return false;
-  const s = JSON.parse(undoSnapshot);
-  state.events = s.events;
-  state.tasks = s.tasks;
-  undoSnapshot = null;
-  save();
-  return true;
+  const cur = snapStr();
+  while (undoStack.length) {
+    const top = undoStack.pop();
+    if (top.json === cur) continue;
+    const s = JSON.parse(top.json);
+    state.events = s.events;
+    state.tasks = s.tasks;
+    save();
+    return true;
+  }
+  return false;
+}
+export const canUndo = () => undoStack.some((x) => x.json !== snapStr());
+
+// Co zmieniło się między dwoma stanami, po ludzku.
+function diffNames(a, b) {
+  const out = [];
+  const cmp = (list0, list1, label) => {
+    const m0 = new Map(list0.map((x) => [x.id, x]));
+    const m1 = new Map(list1.map((x) => [x.id, x]));
+    for (const [id, x] of m1) {
+      const old = m0.get(id);
+      if (!old) out.push(`Dodano: ${x.title}`);
+      else if (JSON.stringify(old) !== JSON.stringify(x)) out.push(label === 'z' && x.done && !old.done ? `Zrobione: ${x.title}` : `Zmieniono: ${x.title}`);
+    }
+    for (const [id, x] of m0) if (!m1.has(id)) out.push(`Usunięto: ${x.title}`);
+  };
+  cmp(a.events, b.events, 'w');
+  cmp(a.tasks, b.tasks, 'z');
+  return out;
+}
+// Historia od najnowszej: { at, changes, steps } (steps = ile razy cofnąć, żeby wrócić do stanu sprzed tej zmiany).
+export function historyList() {
+  const out = [];
+  let next = JSON.parse(snapStr());
+  for (let i = undoStack.length - 1; i >= 0; i--) {
+    const prev = JSON.parse(undoStack[i].json);
+    const changes = diffNames(prev, next);
+    if (changes.length) out.push({ at: undoStack[i].at, changes, steps: undoStack.length - i });
+    next = prev;
+  }
+  return out;
+}
+export function undoTo(steps) {
+  for (let i = 0; i < steps && undoStack.length; i++) {
+    const top = undoStack.pop();
+    if (i === steps - 1) { const s = JSON.parse(top.json); state.events = s.events; state.tasks = s.tasks; save(); }
+  }
 }
 
 export const catOf = (id) => state.cats.find((c) => c.id === id) || state.cats.find((c) => c.id === 'inne') || state.cats[state.cats.length - 1];
@@ -188,7 +250,7 @@ export function detachOccurrence(inst, patch) {
   const ev = state.events.find((e) => e.id === inst.ev.id);
   if (!ev) return null;
   ev.exdates = [...(ev.exdates || []), inst.date];
-  const copy = { ...structuredClone(ev), id: uid(), rrule: null, exdates: [], start: fmtDT(inst.start), end: fmtDT(inst.end), ...patch };
+  const copy = { ...structuredClone(ev), id: uid(), sharedId: null, rrule: null, exdates: [], start: fmtDT(inst.start), end: fmtDT(inst.end), ...patch };
   state.events.push(copy);
   save();
   return copy;
@@ -202,7 +264,7 @@ export function splitSeries(inst, patch) {
   const first = ymd(parseDT(ev.start)) === inst.date;
   if (first) { Object.assign(ev, patch); save(); return ev; }
   const prev = ymd(addDays(parseYmd(inst.date), -1));
-  const copy = { ...structuredClone(ev), id: uid(), exdates: (ev.exdates || []).filter((x) => x >= inst.date), ...patch };
+  const copy = { ...structuredClone(ev), id: uid(), sharedId: null, exdates: (ev.exdates || []).filter((x) => x >= inst.date), ...patch };
   ev.rrule = { ...ev.rrule, until: prev };
   ev.exdates = (ev.exdates || []).filter((x) => x <= prev);
   state.events.push(copy);
@@ -247,6 +309,7 @@ export function newTask(partial = {}) {
 }
 export function addTask(t) {
   snapshot();
+  if (t.due && !t.origDue) t.origDue = t.due;
   state.tasks.push(t);
   save();
   return t;
@@ -255,6 +318,7 @@ export function updateTask(id, patch) {
   const t = state.tasks.find((x) => x.id === id);
   if (!t) return;
   snapshot();
+  if (patch.due && !t.origDue) t.origDue = t.due || patch.due;
   Object.assign(t, patch);
   save();
 }
@@ -281,6 +345,7 @@ export function rolloverTasks(now = new Date()) {
   let n = 0;
   for (const t of state.tasks) {
     if (!t.done && t.due && t.due < today) {
+      if (!t.origDue) t.origDue = t.due;
       t.due = today;
       t.rolled = (t.rolled || 0) + 1;
       n++;
@@ -346,7 +411,8 @@ export function importData(text) {
   if (!d || !Array.isArray(d.events)) throw new Error('To nie wygląda na kopię kalendarza.');
   snapshot();
   const base = fresh();
-  Object.assign(state, base, d, { settings: { ...base.settings, ...(d.settings || {}), share: { ...base.settings.share, ...((d.settings || {}).share || {}) } } });
+  Object.assign(state, base, d, { settings: { ...base.settings, ...(d.settings || {}), share: { ...base.settings.share, ...((d.settings || {}).share || {}) }, buffer: { ...base.settings.buffer, ...((d.settings || {}).buffer || {}) } } });
+  migrate(state);
   save();
 }
 

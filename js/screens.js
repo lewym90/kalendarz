@@ -1,18 +1,24 @@
-// Ekrany: Dziś, Kalendarz (miesiąc, tydzień, dzień, agenda), Zadania, Centrum.
+// Ekrany: Dziś, Kalendarz (miesiąc, tydzień, dzień, agenda), Zadania, Więcej.
 import {
   esc, ymd, parseYmd, parseDT, fmtTime, pad, addDays, addMinutes, startOfDay, startOfWeek, sameDay, diffDays, relDay, fmtDayLong, fmtDayMid, fmtCountdown, fmtDuration, clamp, ICON,
   DAYS_FULL, DAYS_SHORT, DAYS_LETTER, MONTHS, MONTHS_GEN, MONTHS_SHORT, capFirst, haptic,
 } from './util.js';
-import { state, catOf, effectiveReminders, updateEvent, detachOccurrence, undo, newEvent, addEvent, updateTask, batch, describeRule as describeRuleDef } from './store.js';
+import { state, catOf, updateEvent, detachOccurrence, undo, newEvent, addEvent, updateTask, batch, describeRule as describeRuleDef } from './store.js';
 import { instancesInRange, layoutColumns, describeRule } from './recur.js';
 import { nav, toast, rerender } from './ui.js';
-import { weatherKind, cachedWeather, hourlyFor, dailyFor, isOutdoor } from './weather.js';
+import { weatherKind, cachedWeather, hourlyFor, dailyFor, isOutdoor, weatherAlerts } from './weather.js';
 import { lockOn, lockSummary } from './lock.js';
 import { dayInfo, nameDays, isoWeek, sunTimes } from './extras.js';
+import { glyphFor, glyphHtml } from './glyphs.js';
+import { skyName, skyUrl } from './sky.js';
+import { backupOn, backupInfo } from './backup.js';
+import { invitesForMe } from './space.js';
+import { colorChips } from './more.js';
+import { nextUp } from './plan.js';
 import { pushConfig, pushSupported } from './push.js';
 import { peerEvents, peerList, peersOn } from './peers.js';
 import { notifPermission, notifSupported, isStandalone } from './notify.js';
-import { shortRemind, openEventEditor, defaultDraftFor, openQuickAdd, autoName } from './editors.js';
+import { openEventEditor, defaultDraftFor } from './editors.js';
 
 export const dragState = { endedAt: 0, active: false };
 
@@ -21,7 +27,22 @@ const hmToMin = (s) => { const [h, m] = s.split(':').map(Number); return h * 60 
 const minOf = (d) => d.getHours() * 60 + d.getMinutes();
 
 const evs = () => { const p = peerEvents(); return p.length ? state.events.concat(p) : state.events; };
-const catOfEv = (ev) => (ev.peer ? { id: 'peer', name: ev.peer.name, color: ev.peer.color } : catOf(ev.cat));
+export const myColor = () => state.settings.share?.color || '#2E8BFF';
+// Kolor wpisu to kolor osoby: moje mają mój, jej mają jej. Kategorię pokazuje ikonka.
+const catOfEv = (ev) => (ev.peer ? { id: 'peer', name: ev.peer.name, color: ev.peer.color } : { ...catOf(ev.cat), color: myColor() });
+
+// Filtry widoków kalendarza: osoba i kategorie.
+const filterOn = () => nav.filterWho !== 'all' || nav.filterCats.length > 0;
+function calEvs() {
+  const list = evs();
+  if (!filterOn()) return list;
+  return list.filter((e) => {
+    if (nav.filterWho === 'me' && e.peer) return false;
+    if (nav.filterWho === 'peer' && !e.peer) return false;
+    if (nav.filterCats.length && !e.peer && !nav.filterCats.includes(e.cat)) return false;
+    return true;
+  });
+}
 
 export function instOf(key) {
   const [id, date] = key.split('@');
@@ -58,13 +79,13 @@ function evRow(inst, now) {
   }
   const pb = inst.ev.peer ? `<span class="pbadge" style="--pc:${inst.ev.peer.color}">${esc(inst.ev.peer.name.charAt(0).toUpperCase())}</span>` : '';
   return `<button type="button" class="ev ${past ? 'past' : ''} ${live ? 'live' : ''} ${inst.ev.peer ? 'peer' : ''}" style="--c:${c.color}" data-act="open-ev" data-key="${inst.key}">
-    <div class="t">${pb}${esc(inst.title)}${inst.ev.private && !inst.ev.peer ? `<span class="ico lockmini">${ICON.lock}</span>` : ''}</div>
-    <div class="s">${inst.allDay ? '<span>Cały dzień</span>' : `<span>${fmtTime(inst.start)}–${fmtTime(inst.end)}</span>`}${inst.ev.loc ? `<span>${esc(inst.ev.loc)}</span>` : ''}${inst.recurring ? `<span>${repeatMini}</span>` : ''}${wx}</div>
+    ${glyphHtml(glyphFor(inst.ev), 'sm')}<div class="evb"><div class="t">${pb}${esc(inst.title)}${inst.ev.private && !inst.ev.peer ? `<span class="ico lockmini">${ICON.lock}</span>` : ''}</div>
+    <div class="s">${inst.allDay ? '<span>Cały dzień</span>' : `<span>${fmtTime(inst.start)}–${fmtTime(inst.end)}</span>`}${inst.ev.loc ? `<span>${esc(inst.ev.loc)}</span>` : ''}${inst.recurring ? `<span>${repeatMini}</span>` : ''}${wx}</div></div>
   </button>`;
 }
 
 function taskRow(t, today = ymd(new Date())) {
-  const c = catOf(t.cat);
+  const c = { name: catOf(t.cat).name, color: myColor() };
   const late = t.due && t.due < today && !t.done;
   const meta = [];
   if (t.due) meta.push(`<span class="${late ? 'late' : ''}">${esc(relDay(parseYmd(t.due)))}${t.dueTime ? ', ' + t.dueTime : ''}</span>`);
@@ -97,185 +118,103 @@ function dayMeta(d, { sun = true, week = false } = {}) {
 // ---------- Dziś ----------
 export function skyPhase(now) {
   const h = now.getHours();
-  if (h < 5) return 'night';
-  if (h < 8) return 'dawn';
-  if (h < 12) return 'morning';
-  if (h < 17) return 'day';
-  if (h < 20) return 'dusk';
-  return 'night';
+  return h < 5 ? 'night' : h < 8 ? 'dawn' : h < 12 ? 'morning' : h < 17 ? 'day' : h < 20 ? 'dusk' : 'night';
 }
 
-function insightsFor(timed, now, today, weather) {
-  const out = [];
-  for (let i = 0; i < timed.length; i++) {
-    for (let j = i + 1; j < timed.length; j++) {
-      const a = timed[i];
-      const b = timed[j];
-      if (b.start < a.end && b.end > now) {
-        out.push({ warn: true, icon: 'alert', html: `<b>Nakładają się:</b> ${esc(a.title)} i ${esc(b.title)} (${fmtTime(b.start)})`, act: `data-act="open-ev" data-key="${b.key}"` });
-        break;
-      }
-    }
-    if (out.length >= 1) break;
-  }
-  const overdue = state.tasks.filter((t) => !t.done && t.due && t.due < ymd(today)).length;
-  if (overdue) out.push({ warn: true, icon: 'tasks', html: `<b>${overdue} ${plural(overdue, 'zaległe zadanie', 'zaległe zadania', 'zaległych zadań')}</b>`, act: 'data-act="tab" data-tab="tasks"' });
+let shownSky = '';
+export const currentSky = (now = new Date()) => skyName(now, state.settings.city.lat, state.settings.city.lon, cachedWeather()?.code);
 
-  const dayStart = hmToMin(state.settings.dayStart);
-  const dayEnd = hmToMin(state.settings.dayEnd);
-  const from = Math.max(minOf(now), dayStart);
-  if (timed.length && from < dayEnd - 60) {
-    const busy = timed.map((i) => [Math.max(minOf(i.start), from), Math.min(minOf(i.end), dayEnd)]).filter(([a, b]) => b > a).sort((a, b) => a[0] - b[0]);
-    const gaps = [];
-    let cur = from;
-    for (const [a, b] of busy) { if (a - cur >= 90) gaps.push([cur, a]); cur = Math.max(cur, b); }
-    if (dayEnd - cur >= 90) gaps.push([cur, dayEnd]);
-    if (gaps.length) {
-      const f = (m) => `${pad(Math.floor(m / 60))}:${pad(m % 60)}`;
-      out.push({ icon: 'clock', act: 'data-act="find-slot"', html: `<b>Wolne okna:</b> ${gaps.slice(0, 2).map(([a, b]) => `${f(a)}–${f(b)}`).join(' i ')}` });
-    }
-  }
-  const booked = timed.reduce((s, i) => s + (i.end - i.start) / 60000, 0);
-  if (booked >= 360) out.push({ icon: 'bolt', html: `<b>Gęsty dzień:</b> ${fmtDuration(booked)} w kalendarzu` });
-  return out.slice(0, 4);
+function planRow(i, now, next) {
+  const c = catOfEv(i.ev);
+  const past = i.end <= now;
+  const live = !i.allDay && i.start <= now && i.end > now;
+  const isNext = next && i.key === next.key;
+  const dur = i.allDay ? '' : fmtDuration((i.end - i.start) / 60000).replace(' godz.', ' h');
+  const place = i.ev.loc ? `<span class="pin"><span class="ico">${ICON.pin}</span>${esc(i.ev.loc)}</span>` : '';
+  const sub = [place, dur].filter(Boolean).join('<span class="sep">·</span>');
+  const pb = i.ev.peer ? `<span class="pbadge" style="--pc:${i.ev.peer.color}">${esc(i.ev.peer.name.charAt(0).toUpperCase())}</span>` : '';
+  const shared = i.ev.sharedId ? `<span class="shr" title="Wspólne"><span class="ico">${ICON.users}</span></span>` : '';
+  let right = '';
+  if (past) right = `<span class="st ok"><span class="ico">${ICON.check}</span></span>`;
+  else if (live) right = `<span class="st live"><b>Trwa</b><small>${Math.max(1, Math.round((i.end - now) / 60000))} min</small></span>`;
+  const prog = live ? clamp(((now - i.start) / (i.end - i.start)) * 100, 0, 100) : 0;
+  return `<button type="button" class="pl ${past ? 'past' : ''} ${live ? 'live' : ''} ${isNext ? 'next' : ''} ${i.ev.peer ? 'peer' : ''}" style="--c:${c.color}" data-act="open-ev" data-key="${i.key}">
+    ${isNext ? `<span class="nx">Następne · ${esc(fmtCountdown(i.start - now))}</span>` : ''}
+    <span class="pl-in"><span class="tm">${i.allDay ? 'Cały dzień' : `${fmtTime(i.start)}–${fmtTime(i.end)}`}</span>${glyphHtml(glyphFor(i.ev))}<span class="pl-t"><b>${pb}${esc(i.title)}${shared}</b>${sub ? `<small>${sub}</small>` : ''}</span>${right}</span>
+    ${live ? `<span class="pl-prog"><i style="width:${prog}%"></i></span>` : ''}
+  </button>`;
+}
+
+export function alertCard(w, now = new Date()) {
+  const today = startOfDay(now);
+  const plan = instancesInRange(state.events, today, addDays(today, 1)).filter((i) => !i.allDay && isOutdoor(i.ev));
+  const list = weatherAlerts(w, now, plan);
+  if (!list.length) return '';
+  const a = list[0];
+  return `<button type="button" class="wxcard" data-act="weather"><span class="wxi"><span class="ico">${ICON[a.icon] || ICON.alert}</span></span><span class="rt"><b>${esc(a.title)}</b><small>${esc(a.sub)}</small></span><span class="ico chev">${ICON.chevR}</span></button>`;
 }
 
 export function renderToday() {
   const now = new Date();
   const today = startOfDay(now);
   const s = state.settings;
-  const insts = instancesInRange(state.events, today, addDays(today, 1));
-  const timed = insts.filter((i) => !i.allDay);
-  const allday = insts.filter((i) => i.allDay);
-  const phase = skyPhase(now);
   const hr = now.getHours() + now.getMinutes() / 60;
-  const p = hr >= 6 && hr < 20 ? (hr - 6) / 14 : ((hr - 20 + 24) % 24) / 10;
-  const orbX = 22 + p * 66;
-  const orbY = 66 - Math.sin(p * Math.PI) * 22;
-  const stars = phase === 'night' ? 1 : phase === 'dawn' || phase === 'dusk' ? 0.35 : 0;
-  const greet = hr < 5 ? 'Późna pora' : hr < 18 ? 'Dzień dobry' : hr < 23 ? 'Dobry wieczór' : 'Dobranoc';
-
-  // Pasek dnia
-  let ds = hmToMin(s.dayStart);
-  let de = hmToMin(s.dayEnd);
-  for (const i of timed) {
-    ds = Math.min(ds, Math.floor(minOf(i.start) / 60) * 60);
-    de = Math.max(de, i.end.getDate() !== i.start.getDate() ? 1440 : Math.ceil(minOf(i.end) / 60) * 60);
-  }
-  ds = Math.max(0, ds); de = Math.min(1440, de);
-  const total = Math.max(60, de - ds);
-  const pct = (m) => clamp(((m - ds) / total) * 100, 0, 100);
-  const items = timed.map((i) => ({ i, sMin: clamp(minOf(i.start), ds, de), eMin: clamp(i.end.getDate() !== i.start.getDate() ? de : minOf(i.end), ds, de) })).filter((x) => x.eMin > x.sMin);
-  layoutColumns(items);
-  const segs = items.map((x) => {
-    const c = catOfEv(x.i.ev);
-    const lh = 100 / x.cols;
-    return `<i class="seg" style="--c:${c.color};left:${pct(x.sMin)}%;width:calc(${pct(x.eMin) - pct(x.sMin)}% - 2px);top:calc(${x.col * lh}% + 3px);height:calc(${lh}% - 6px)"></i>`;
-  }).join('');
-  const nowPct = pct(minOf(now));
-  const lbl = (m) => `${Math.floor(m / 60)}:${pad(m % 60)}`;
-
-  // Następne
-  const nextInst = timed.find((i) => i.end > now);
-  let nextHtml;
-  if (!state.events.length && !state.tasks.length) {
-    nextHtml = `<div class="next empty fade-in">
-      <div class="empty-ico"><span class="ico">${ICON.sparkle}</span></div>
-      <div class="cd">Co masz dziś w planach?</div>
-      <div class="nt">Wystarczy jedno zdanie. Datę, godzinę i powtarzanie rozpoznam sam.</div>
-      <div class="ex-chips">${['jutro 17 siłownia', 'co wtorek 9:30 dentysta', 'piątek 19 kolacja u Oli'].map((t) => `<button type="button" class="ex-chip" data-act="quick-text" data-text="${esc(t)}">${esc(t)}</button>`).join('')}</div>
-      <div class="empty-act"><button type="button" class="btn primary small" data-act="quick">Dodaj wydarzenie</button><button type="button" class="btn small" data-act="sample">Wczytaj przykłady</button></div></div>`;
-  } else if (nextInst) {
-    const c = catOfEv(nextInst.ev);
-    const live = nextInst.start <= now;
-    const prog = live ? clamp(((now - nextInst.start) / (nextInst.end - nextInst.start)) * 100, 0, 100) : 0;
-    nextHtml = `<button type="button" class="next fade-in" style="--c:${c.color};text-align:left;width:calc(100% - 32px)" data-act="open-ev" data-key="${nextInst.key}">
-      <div class="cd">${live ? 'Trwa teraz' : fmtCountdown(nextInst.start - now)}${live ? `<small>koniec ${fmtCountdown(nextInst.end - now).replace('za ', 'za ')}</small>` : ''}</div>
-      <div class="nt">${esc(nextInst.title)}</div>
-      <div class="meta"><span><span class="ico">${ICON.clock}</span>${fmtTime(nextInst.start)}–${fmtTime(nextInst.end)}</span>${nextInst.ev.loc ? `<span><span class="ico">${ICON.pin}</span>${esc(nextInst.ev.loc)}</span>` : ''}<span>${esc(c.name)}</span></div>
-      ${live ? `<div class="prog"><i style="width:${prog}%"></i></div>` : ''}
-    </button>`;
-  } else {
-    const fut = instancesInRange(state.events, addDays(today, 1), addDays(today, 30)).find((i) => !i.allDay) || instancesInRange(state.events, addDays(today, 1), addDays(today, 30))[0];
-    nextHtml = `<div class="next empty fade-in"><div class="cd">${timed.length || allday.length ? 'Na dziś to już wszystko' : 'Dziś masz wolne'}</div>
-      <div class="nt" style="font-weight:500;color:var(--text2);font-size:16px">${fut ? `Następne: ${esc(relDay(fut.start).toLowerCase())}${fut.allDay ? '' : ', ' + fmtTime(fut.start)}, ${esc(fut.title)}` : 'Nic więcej nie zaplanowano.'}</div></div>`;
-  }
-
-  const allI = instancesInRange(evs(), today, addDays(today, 1));
-  const timedA = allI.filter((i) => !i.allDay);
-  const alldayA = allI.filter((i) => i.allDay);
-  // Oś dnia
-  let tl = '';
-  if (alldayA.length) tl += `<div class="chips" style="padding:0 20px 12px">${alldayA.map((i) => `<button type="button" class="chip c" style="--c:${catOfEv(i.ev).color}" data-act="open-ev" data-key="${i.key}">${esc(i.title)}</button>`).join('')}</div>`;
-  if (timedA.length) {
-    let placed = false;
-    const nowLine = `<div class="tl-now"><span>${fmtTime(now)}</span></div>`;
-    tl += '<div class="tl">';
-    const pastList = timedA.filter((i) => i.end <= now);
-    if (pastList.length) tl += `<div class="tl-row"><div class="tl-time"></div><button type="button" class="past-sum" data-act="toggle-past">${pastList.length} ${plural(pastList.length, 'zakończone wydarzenie', 'zakończone wydarzenia', 'zakończonych wydarzeń')}<span class="ico" style="transform:rotate(${nav.showPast ? 270 : 90}deg)">${ICON.chevR}</span></button></div>`;
-    for (const i of timedA) {
-      if (i.end <= now && !nav.showPast) continue;
-      if (!placed && i.start > now) { tl += nowLine; placed = true; }
-      tl += `<div class="tl-row"><div class="tl-time">${fmtTime(i.start)}<small>${fmtTime(i.end)}</small></div>${evRow(i, now)}</div>`;
-    }
-    if (!placed) tl += nowLine;
-    tl += '</div>';
-  } else if (!alldayA.length) tl = '<div class="empty"><b>Dzień bez planów</b>Dodaj coś zdaniem, na przykład „dziś 18 spacer".</div>';
-
-  const insights = insightsFor(timed, now, today, null);
-  const insHtml = insights.length ? `<div class="insights" id="insights">${insights.map((x) => `<${x.act ? 'button type="button" ' + x.act : 'div'} class="insight ${x.warn ? 'warn' : ''}"><span class="ico">${ICON[x.icon]}</span><span>${x.html}</span></${x.act ? 'button' : 'div'}>`).join('')}</div>` : '<div class="insights" id="insights"></div>';
-
-  const tdy = ymd(today);
-  const dueTasks = state.tasks.filter((t) => !t.done && t.due && t.due <= tdy).sort((a, b) => b.prio - a.prio || a.due.localeCompare(b.due));
-  const tasksHtml = dueTasks.length ? `<section class="sec"><div class="sec-h"><h2>Zadania na dziś</h2><button type="button" class="link" data-act="tab" data-tab="tasks">Wszystkie</button></div><div class="tasks">${dueTasks.slice(0, 5).map((t) => taskRow(t, tdy)).join('')}</div></section>` : '';
-
-  const tomorrow = addDays(today, 1);
-  const tmw = instancesInRange(evs(), tomorrow, addDays(tomorrow, 1));
-  const tmwHtml = tmw.length ? `<section class="sec"><div class="sec-h"><h2>Jutro</h2><button type="button" class="link" data-act="goto-day" data-date="${ymd(tomorrow)}">Zobacz dzień</button></div><div class="tl">${tmw.slice(0, 3).map((i) => `<div class="tl-row"><div class="tl-time">${i.allDay ? '' : fmtTime(i.start)}</div>${evRow(i, now)}</div>`).join('')}${tmw.length > 3 ? `<div class="empty" style="padding:6px">i ${tmw.length - 3} więcej</div>` : ''}</div></section>` : '';
-
-  // Pasek tygodnia
-  const ws = startOfWeek(today, s.weekStart);
-  const wk = instancesInRange(evs(), ws, addDays(ws, 7));
-  const byDay = groupByDay(wk);
-  const strip = Array.from({ length: 7 }, (_, k) => {
-    const d = addDays(ws, k);
-    const list = byDay.get(ymd(d)) || [];
-    const cols = [...new Set(list.map((i) => catOfEv(i.ev).color))].slice(0, 3);
-    return `<button type="button" class="wd ${sameDay(d, today) ? 'today' : ''}" data-act="goto-day" data-date="${ymd(d)}"><span class="l">${DAYS_SHORT[d.getDay()]}</span><span class="n">${d.getDate()}</span><span class="dots">${cols.map((c) => `<i style="--c:${c}"></i>`).join('')}</span></button>`;
-  }).join('');
-
+  const greet = hr < 5 ? 'Dobranoc' : hr < 18 ? 'Dzień dobry' : hr < 23 ? 'Dobry wieczór' : 'Dobranoc';
+  const name = (s.displayName || '').trim();
+  const list = instancesInRange(evs(), today, addDays(today, 1));
+  const { next } = nextUp(list, now);
+  const nTasks = state.tasks.filter((t) => !t.done && t.due && t.due <= ymd(today)).length;
+  const st = sunTimes(now, s.city.lat, s.city.lon);
+  const nd = nameDays(now);
+  const info = dayInfo(now);
+  const w = cachedWeather();
+  const sky = currentSky(now);
+  const prevSky = shownSky && shownSky !== sky ? shownSky : '';
+  shownSky = sky;
+  const count = `${list.length} ${plural(list.length, 'wydarzenie', 'wydarzenia', 'wydarzeń')} · ${nTasks} ${plural(nTasks, 'zadanie', 'zadania', 'zadań')}`;
+  const tile = (act, ico, col, label) => `<button type="button" class="tile" ${act} style="--c:${col}"><span class="ti"><span class="ico">${ico}</span></span><span>${label}</span></button>`;
+  const invites = invitesForMe().length;
   return `
-  <header class="sky" data-phase="${phase}" style="--orb-x:${orbX}%;--orb-y:${orbY}%;--stars:${stars}">
-    <div class="sky-stars"></div>
-    <div class="sky-top">
-      <div class="greet">${greet}</div>
-      <div class="sky-actions">
-        <button type="button" class="pill-btn" id="wx" data-act="weather" aria-label="Pogoda"><span class="ico">${ICON.cloud}</span><span id="wx-t">Pogoda</span></button>
-        <button type="button" class="icon-btn" data-act="search" aria-label="Szukaj"><span class="ico">${ICON.search}</span></button>
+  <header class="hero">
+    <div class="hero-img" style="background-image:url(${skyUrl(prevSky || sky)})"></div>
+    ${prevSky ? `<div class="hero-img fade" style="background-image:url(${skyUrl(sky)})"></div>` : ''}
+    <div class="hero-in">
+      <div class="hero-l">
+        <h1><span class="ico">${ICON[hr < 18 && hr >= 5 ? 'sun' : 'moon']}</span>${esc(greet)}${name ? `, ${esc(name)}` : ''}</h1>
+        <p class="d">${esc(capFirst(DAYS_FULL[now.getDay()]))}, ${now.getDate()} ${MONTHS_GEN[now.getMonth()]} ${now.getFullYear()}</p>
+        <p>Tydzień ${isoWeek(now)}${nd ? `<span class="vs"></span>Imieniny: ${esc(nd.split(', ').slice(0, 2).join(', '))}` : ''}</p>
+        ${info ? `<p class="hol ${info.off ? 'off' : ''}">${esc(info.name)}</p>` : ''}
+        ${st ? `<p class="sun"><span class="ico">${ICON.sun}</span>${fmtTime(st.rise)}<span class="ico mo">${ICON.moon}</span>${fmtTime(st.set)}</p>` : ''}
       </div>
+      <button type="button" class="hero-w" id="wx" data-act="weather" aria-label="Pogoda"><span class="ico" id="wx-i">${w ? wIcon(w.code) : ICON.cloud}</span><b id="wx-t">${w ? `${w.temp}°C` : ''}</b><small id="wx-c">${esc(s.city.name)}</small></button>
     </div>
-    <h1 class="date-hero"><span class="dnum">${now.getDate()}</span><span class="dtxt"><span class="dow">${DAYS_FULL[now.getDay()]}</span><span class="mon">${MONTHS_GEN[now.getMonth()]} ${now.getFullYear()}</span></span></h1>
-    <div class="hero-meta">${dayMeta(now, { week: true })}</div>
-    <div class="daybar" aria-hidden="true">${segs}<span class="past" style="width:${nowPct}%"></span><span class="now" style="left:calc(${nowPct}% - 1px)"></span></div>
-    <div class="daybar-lbl"><span>${lbl(ds)}</span><span>${lbl(Math.round((ds + de) / 2 / 30) * 30)}</span><span>${lbl(de)}</span></div>
   </header>
-  ${nextHtml}
-  ${insHtml}
-  <section class="sec"><div class="sec-h"><h2>Plan dnia</h2><button type="button" class="link" data-act="goto-day" data-date="${ymd(today)}">Pełny widok</button></div>${tl}</section>
-  ${tasksHtml}
-  ${tmwHtml}
-  <section class="sec"><div class="sec-h"><h2>Ten tydzień</h2><button type="button" class="link" data-act="goto-week">Otwórz</button></div><div class="weekstrip">${strip}</div></section>
+  <form class="cmd" id="cmd-form" autocomplete="off"><span class="ico spark">${ICON.sparkle}</span><input id="cmd-in" type="text" enterkeyhint="send" autocapitalize="sentences" placeholder="Powiedz lub wpisz, co masz zrobić…" aria-label="Asystent"><button type="button" class="cmd-mic" data-act="cmd-mic" aria-label="Dyktuj głosem"><span class="ico">${ICON.mic}</span></button></form>
+  <div class="tiles">
+    ${tile('data-act="quick"', ICON.calplus, '#19C8FF', 'Dodaj')}
+    ${tile('data-act="quick-task"', ICON.check, '#27E05F', 'Zadanie')}
+    ${tile('data-act="tab" data-tab="shared"', `${ICON.users}${invites ? `<em>${invites}</em>` : ''}`, '#A45CFF', 'Wspólny')}
+    ${tile('data-act="tab" data-tab="auto"', ICON.bolt, '#FFC400', 'Automatyzacje')}
+    ${tile('data-act="tab" data-tab="stats"', ICON.bars, '#2E8BFF', 'Statystyki')}
+  </div>
+  <section class="plan">
+    <div class="plan-h"><h2>Dziś – Twój plan</h2><button type="button" data-act="tab" data-tab="tasks">${count}</button></div>
+    ${list.length ? list.map((i) => planRow(i, now, next)).join('') : '<div class="pl-empty"><b>Na dziś nic nie ma w planie</b>Napisz wyżej, co chcesz zrobić.</div>'}
+  </section>
+  <div id="wx-alert">${alertCard(w, now)}</div>
   <div class="spacer"></div>`;
 }
 
 export function paintWeather(w) {
   const t = document.getElementById('wx-t');
-  const b = document.getElementById('wx');
-  if (!t || !b) return;
-  if (!w) { t.textContent = state.settings.city.name; return; }
-  b.querySelector('.ico').innerHTML = wIcon(w.code);
-  t.textContent = `${w.temp}°  ${state.settings.city.name}`;
-  b.title = `${weatherKind(w.code).label}, odczuwalna ${w.feels}°, dziś ${w.lo}° do ${w.hi}°`;
+  const i = document.getElementById('wx-i');
+  const c = document.getElementById('wx-c');
+  if (c) c.textContent = state.settings.city.name;
+  if (!w || !t) return;
+  i.innerHTML = wIcon(w.code);
+  t.textContent = `${w.temp}°C`;
+  const a = document.getElementById('wx-alert');
+  if (a) a.innerHTML = alertCard(w);
 }
 
 // ---------- Kalendarz ----------
@@ -296,15 +235,24 @@ function calTitle() {
   return 'Agenda';
 }
 
+function filterBar() {
+  const who = [['all', 'Wszyscy'], ['me', 'Moje']];
+  const p = peerList()[0]?.name;
+  if (peersOn() && p) who.push(['peer', p]);
+  return `<div class="filters"><div class="chips scroll">${who.map(([k, l]) => `<button type="button" class="chip ${nav.filterWho === k ? 'on' : ''}" data-act="filter-who" data-v="${k}">${esc(l)}</button>`).join('')}${state.cats.map((c) => `<button type="button" class="chip cf ${nav.filterCats.includes(c.id) ? 'on' : ''}" data-act="filter-cat" data-v="${c.id}">${glyphHtml(glyphFor({ cat: c.id }), 'xs')}${esc(c.name)}</button>`).join('')}</div></div>`;
+}
+
 export function renderCal() {
   const v = nav.calView;
   const head = `<header class="cal-head" id="cal-head">
     <div class="cal-title"><h1>${calTitle()}</h1>
       <div class="cal-nav">
         <button type="button" class="round" data-act="search" aria-label="Szukaj"><span class="ico">${ICON.search}</span></button>
+        <button type="button" class="round ${filterOn() ? 'lit' : ''}" data-act="filter-toggle" aria-label="Filtry" aria-expanded="${!!nav.showFilter}"><span class="ico">${ICON.filter}</span></button>
         ${v === 'agenda' ? '' : `<button type="button" class="round" data-act="cal-prev" aria-label="Poprzedni"><span class="ico">${ICON.chevL}</span></button><button type="button" class="round" data-act="cal-next" aria-label="Następny"><span class="ico">${ICON.chevR}</span></button>`}
       </div></div>
     <div class="cal-views"><div class="seg">${[['month', 'Miesiąc'], ['week', 'Tydzień'], ['3day', '3 dni'], ['day', 'Dzień'], ['agenda', 'Agenda']].map(([k, l]) => `<button type="button" class="${v === k ? 'on' : ''}" data-act="calview" data-v="${k}">${l}</button>`).join('')}</div>${v === 'agenda' ? '' : '<button type="button" class="btn small" data-act="cal-today">Dziś</button>'}</div>
+    ${nav.showFilter ? filterBar() : ''}
   </header>`;
   const body = v === 'month' ? renderMonth() : v === 'week' ? renderGrid(7) : v === '3day' ? renderGrid(3) : v === 'day' ? renderGrid(1) : renderAgenda();
   return head + body;
@@ -317,7 +265,7 @@ function renderMonth() {
   const first = new Date(c.getFullYear(), c.getMonth(), 1);
   const gridStart = startOfWeek(first, ws);
   const weeks = Math.ceil((diffDays(first, gridStart) + new Date(c.getFullYear(), c.getMonth() + 1, 0).getDate()) / 7);
-  const insts = instancesInRange(evs(), gridStart, addDays(gridStart, weeks * 7));
+  const insts = instancesInRange(calEvs(), gridStart, addDays(gridStart, weeks * 7));
   const by = groupByDay(insts);
   const head = Array.from({ length: 7 }, (_, k) => `<div>${DAYS_SHORT[(ws + k) % 7]}</div>`).join('');
   let cells = '';
@@ -326,12 +274,11 @@ function renderMonth() {
     const list = by.get(ymd(d)) || [];
     const n = list.length;
     const cols = [...new Set(list.map((i) => catOfEv(i.ev).color))].slice(0, 3);
-    const heat = n >= 5 ? 3 : n >= 3 ? 2 : n >= 1 ? 1 : 0;
-    const hi = dayInfo(d);
-    cells += `<button type="button" class="mcell ${hi?.off ? 'hol' : ''} ${d.getMonth() !== c.getMonth() ? 'out' : ''} ${sameDay(d, now) ? 'today' : ''} ${sameDay(d, nav.selected) ? 'sel' : ''} ${heat ? 'heat' + heat : ''}" data-act="pick-day" data-date="${ymd(d)}" aria-label="${fmtDayLong(d)}${n ? ', ' + n + ' wydarzeń' : ''}"><span class="n">${d.getDate()}</span><span class="dots">${cols.map((x) => `<i style="--c:${x}"></i>`).join('')}${n > 3 ? `<span class="more">+</span>` : ''}</span></button>`;
+        const hi = dayInfo(d);
+    cells += `<button type="button" class="mcell ${hi?.off ? 'hol' : ''} ${d.getMonth() !== c.getMonth() ? 'out' : ''} ${sameDay(d, now) ? 'today' : ''} ${sameDay(d, nav.selected) ? 'sel' : ''}" data-act="pick-day" data-date="${ymd(d)}" aria-label="${fmtDayLong(d)}${n ? ', ' + n + ' wydarzeń' : ''}"><span class="n">${d.getDate()}</span><span class="dots">${cols.map((x) => `<i style="--c:${x}"></i>`).join('')}${n > 3 ? `<span class="more">+</span>` : ''}</span></button>`;
   }
   const sel = nav.selected;
-  const dayList = (by.get(ymd(sel)) || instancesInRange(evs(), startOfDay(sel), addDays(startOfDay(sel), 1)));
+  const dayList = (by.get(ymd(sel)) || instancesInRange(calEvs(), startOfDay(sel), addDays(startOfDay(sel), 1)));
   const tasks = state.tasks.filter((t) => !t.done && t.due === ymd(sel));
   const rows = dayList.map((i) => `<div class="drow"><div class="tm">${i.allDay ? '' : fmtTime(i.start)}${i.allDay ? '' : `<small>${fmtTime(i.end)}</small>`}</div>${evRow(i, now)}</div>`).join('');
   return `<div class="month"><div class="mhead">${head}</div><div class="mgrid">${cells}</div></div>
@@ -349,7 +296,7 @@ function renderGrid(ncols) {
   const days = ncols === 7 ? Array.from({ length: 7 }, (_, k) => addDays(startOfWeek(nav.cursor, ws), k)) : ncols === 3 ? [0, 1, 2].map((k) => addDays(startOfDay(nav.cursor), k)) : [startOfDay(nav.cursor)];
   const from = days[0];
   const to = addDays(days[days.length - 1], 1);
-  const insts = instancesInRange(evs(), from, to);
+  const insts = instancesInRange(calEvs(), from, to);
   const tight = ncols > 1;
   const narrow = ncols === 7;
 
@@ -401,7 +348,7 @@ function renderGrid(ncols) {
 
   const pageHead = tight ? '' : `<div class="dayhead" style="padding-top:10px"><h2>${relDay(days[0]) === fmtDayMid(days[0]) ? capFirst(DAYS_FULL[days[0].getDay()]) : relDay(days[0])}</h2><button type="button" class="link" data-act="add-on" data-date="${ymd(days[0])}">Dodaj</button></div><div class="dayinfo">${dayMeta(days[0], { week: true })}</div>`;
   const trayTasks = !narrow ? state.tasks.filter((t) => !t.done && (!t.due || t.due <= ymd(days[days.length - 1]))).sort((a, b) => b.prio - a.prio || (a.due || '9').localeCompare(b.due || '9')).slice(0, 14) : [];
-  const tray = trayTasks.length ? `<div class="tray ${ncols === 3 ? 'three' : ''}"><div class="tray-l"><span class="tray-lbl" title="Przytrzymaj zadanie i upuść na osi czasu">Zablokuj czas:</span>${trayTasks.map((t) => `<span class="tk" style="--c:${catOf(t.cat).color}" data-task="${t.id}">${esc(t.title)}</span>`).join('')}</div></div>` : '';
+  const tray = trayTasks.length ? `<div class="tray ${ncols === 3 ? 'three' : ''}"><div class="tray-l"><span class="tray-lbl" title="Przytrzymaj zadanie i upuść na osi czasu">Zablokuj czas:</span>${trayTasks.map((t) => ` <span class="tk" style="--c:${myColor()}" data-task="${t.id}">${esc(t.title)}</span>`).join('')}</div></div>` : '';
   const dayTasks = !tight ? state.tasks.filter((t) => !t.done && t.due === ymd(days[0])) : [];
   return `${header}${pageHead}${tray}${allday}
   <div class="tgrid" id="tgrid" style="--hh:${HH}px;height:${24 * HH}px"><div class="hours">${hours}</div><div class="cols" style="grid-template-columns:repeat(${ncols},1fr);height:${24 * HH}px"><div style="position:absolute;inset:0;pointer-events:none">${lines}</div>${cols}</div></div>
@@ -413,7 +360,7 @@ function renderAgenda() {
   const now = new Date();
   const today = startOfDay(now);
   const to = addDays(today, nav.agendaDays);
-  const insts = instancesInRange(evs(), today, to);
+  const insts = instancesInRange(calEvs(), today, to);
   const by = groupByDay(insts);
   let html = '';
   let shown = 0;
@@ -746,116 +693,63 @@ export function renderTasks() {
   ${body}<div class="spacer"></div>`;
 }
 
-// ---------- Centrum ----------
-const sw = (path, on) => `<button type="button" class="switch ${on ? 'on' : ''}" role="switch" aria-checked="${on}" data-tog="${path}"></button>`;
-
-const SHARE_COLORS = ['#34d3ff', '#ff6fb5', '#3fd08a', '#ffbf3f', '#9a6bff', '#ff6a6a', '#3ee0c8', '#a9a9c4'];
-function shareSection() {
-  const sh = state.settings.share;
-  const peers = peerList();
-  const sw = (path, on) => `<button type="button" class="switch ${on ? 'on' : ''}" role="switch" aria-checked="${on}" data-tog="${path}"></button>`;
-  const sub = !sh.name ? 'Wpisz swoje imię, żeby inni widzieli, czyje to wpisy.' : peers.length ? `Widzisz: ${peers.map((p) => esc(p.name)).join(', ')}` : sh.view ? 'Nikt jeszcze nie udostępnia kalendarza.' : 'Włącz, żeby zobaczyć wpisy drugiej osoby.';
-  return `<section class="sec"><div class="sec-h"><h2>Wspólny kalendarz</h2></div>
-    <div class="list">
-      <div class="row"><span class="ico">${ICON.today}</span><span class="rt"><b>Moje imię</b><small>Tak będą podpisane Twoje wpisy</small></span><input type="text" data-in="share.name" value="${esc(sh.name)}" maxlength="24" placeholder="np. Marek" autocapitalize="words" autocomplete="off" style="max-width:130px;text-align:right" aria-label="Moje imię"></div>
-      <div class="row" style="flex-wrap:wrap"><span class="rt"><b>Mój kolor</b></span><div class="chips">${SHARE_COLORS.map((c) => `<button type="button" class="chip ${sh.color === c ? 'on' : ''}" style="padding:0;width:34px;justify-content:center;background:${c}" data-act="share-color" data-v="${c}" aria-label="Kolor ${c}">${sh.color === c ? `<span class="ico" style="color:#fff">${ICON.check}</span>` : ''}</button>`).join('')}</div></div>
-      <div class="row"><span class="ico">${ICON.cal}</span><span class="rt"><b>Udostępniaj mój kalendarz</b><small>Inni zobaczą Twoje wydarzenia (prywatne jako „Zajęte")</small></span>${sw('share.on', sh.on)}</div>
-      <div class="row"><span class="ico">${ICON.today}</span><span class="rt"><b>Pokaż kalendarz drugiej osoby</b><small>${sub}</small></span>${sw('share.view', sh.view)}</div>
-      <div class="row"><span class="ico">${ICON.bell}</span><span class="rt"><b>Powiadamiaj o jej wpisach</b><small>${sh.view ? 'Gdy druga osoba doda wydarzenie, dostaniesz powiadomienie (też przy zamkniętej aplikacji).' : 'Działa po włączeniu podglądu kalendarza drugiej osoby.'}</small></span>${sw('share.notify', sh.notify !== false)}</div>
-    </div></section>`;
-}
-
+// ---------- Więcej ----------
 export function renderHub() {
   const s = state.settings;
-  const now = new Date();
-  const ws = startOfWeek(now, s.weekStart);
-  const wk = instancesInRange(state.events, ws, addDays(ws, 7));
-  const hoursPer = Array(7).fill(0);
-  let hoursTotal = 0;
-  wk.forEach((i) => {
-    if (i.allDay) return;
-    const h = (i.end - i.start) / 3600000;
-    hoursTotal += h;
-    hoursPer[(i.start.getDay() - s.weekStart + 7) % 7] += h;
-  });
-  const maxH = Math.max(1, ...hoursPer);
-  const busiest = hoursPer.indexOf(Math.max(...hoursPer));
-  const bars = hoursPer.map((h, k) => {
-    const d = addDays(ws, k);
-    return `<div class="${sameDay(d, now) ? 't' : ''}"><i style="height:${Math.max(4, (h / maxH) * 100)}%"></i><span>${DAYS_LETTER[d.getDay()]}</span></div>`;
-  }).join('');
   const perm = notifPermission();
   const pcfg = pushConfig();
-  const pushSub = pcfg ? (pcfg.error ? `Błąd: ${pcfg.error}` : pcfg.syncedAt ? `Połączono. Ostatnia synchronizacja: ${new Date(pcfg.syncedAt).toLocaleTimeString('pl-PL', { hour: '2-digit', minute: '2-digit' })}.` : 'Połączono.') : 'Przypomnienia także przy zamkniętej aplikacji (własny serwer).';
+  const pushSub = pcfg ? (pcfg.error ? `Błąd: ${pcfg.error}` : pcfg.syncedAt ? `Połączono. Ostatnio: ${new Date(pcfg.syncedAt).toLocaleTimeString('pl-PL', { hour: '2-digit', minute: '2-digit' })}.` : 'Połączono.') : 'Przypomnienia także przy zamkniętej aplikacji.';
   const standalone = isStandalone();
-  const notifSub = !notifSupported() ? 'Ta przeglądarka nie obsługuje powiadomień.' : perm === 'granted' ? 'Włączone. Przypomnienia pojawią się na ekranie blokady.' : perm === 'denied' ? 'Zablokowane. Włącz w Ustawieniach iPhone\'a, w sekcji Powiadomienia.' : standalone ? 'Włącz, żeby dostawać przypomnienia i poranny brief.' : 'Najpierw dodaj aplikację do ekranu początkowego.';
-  const catRows = state.cats.map((c) => `<button type="button" class="row" data-act="edit-cat" data-id="${c.id}"><span class="catdot" style="--c:${c.color};padding:0;height:auto;background:none"></span><span class="rt"><b>${esc(c.name)}</b></span><span class="val">${state.events.filter((e) => e.cat === c.id).length}</span></button>`).join('');
-  const ruleRows = state.rules.map((r) => `<div class="row"><button type="button" class="rt" data-act="edit-rule" data-id="${r.id}" style="text-align:left"><b>${esc(r.name || autoName(r))}</b><small>Jeśli: ${esc(describeRuleDef(r))}</small></button>${sw(`rule:${r.id}`, r.on)}</div>`).join('');
-  const w = s.weekly;
-
-  return `<header class="page-h"><h1>Centrum</h1><p>Automatyzacje, powiadomienia i wygląd</p></header>
-  <div class="spacer"></div>
-  <button type="button" class="stat-card" data-act="stats" style="display:block;width:calc(100% - 32px);text-align:left"><div class="big">${wk.length}<small>${plural(wk.length, 'wydarzenie', 'wydarzenia', 'wydarzeń')} w tym tygodniu</small></div>
-    <div style="color:var(--text2);font-size:14px;margin-top:8px">${hoursTotal ? `${fmtDuration(hoursTotal * 60)} w kalendarzu. Najgęstszy dzień: ${DAYS_FULL[addDays(ws, busiest).getDay()]}.` : 'Ten tydzień jest jeszcze pusty.'}</div>
-    <div class="bars">${bars}</div><div class="stat-more">Statystyki i porównanie tygodni ›</div></button>
-
-  <section class="sec"><div class="sec-h"><h2>Narzędzia</h2></div>
-    <div class="list">
-      <button type="button" class="row" data-act="find-slot"><span class="ico">${ICON.clock}</span><span class="rt"><b>Znajdź wolny termin</b><small>Pierwsze wolne okna między wydarzeniami</small></span></button>
-      <button type="button" class="row" data-act="stats"><span class="ico">${ICON.bolt}</span><span class="rt"><b>Statystyki</b><small>Czas wg kategorii i porównanie z poprzednim okresem</small></span></button>
-      <button type="button" class="row" data-act="lock-setup"><span class="ico">${ICON.lock || ICON.check}</span><span class="rt"><b>Blokada Face ID</b><small>${lockSummary()}</small></span><span class="val">${lockOn() ? 'Wł.' : 'Wył.'}</span></button>
-    </div>
-  </section>
-
-  <section class="sec"><div class="sec-h"><h2>Automatyzacje</h2></div>
-    <div class="list">
-      <div class="row"><span class="ico">${ICON.sun}</span><span class="rt"><b>Poranny brief</b><small>Podsumowanie dnia na starcie</small></span><input type="time" data-in="morning.time" value="${s.morning.time}" aria-label="Godzina porannego briefu">${sw('morning.on', s.morning.on)}</div>
-      <div class="row"><span class="ico">${ICON.moon}</span><span class="rt"><b>Podgląd jutra</b><small>Wieczorem, co Cię czeka rano</small></span><input type="time" data-in="evening.time" value="${s.evening.time}" aria-label="Godzina wieczornego podglądu">${sw('evening.on', s.evening.on)}</div>
-      <div class="row"><span class="ico">${ICON.sparkle}</span><span class="rt"><b>Przegląd tygodnia</b><small><select data-in="weekly.day" data-num="1" aria-label="Dzień przeglądu">${[1, 2, 3, 4, 5, 6, 0].map((d) => `<option value="${d}" ${w.day === d ? 'selected' : ''}>${DAYS_FULL[d]}</option>`).join('')}</select></small></span><input type="time" data-in="weekly.time" value="${w.time}" aria-label="Godzina przeglądu tygodnia">${sw('weekly.on', w.on)}</div>
-      <div class="row"><span class="ico">${ICON.repeat}</span><span class="rt"><b>Przenoś zaległe zadania</b><small>Niezrobione zadania same wskakują na dziś</small></span>${sw('rollover', s.rollover)}</div>
-    </div>
-    <div class="sec-h" style="padding-top:20px"><h2 style="font-size:19px">Reguły</h2><button type="button" class="link" data-act="edit-rule" data-id="">Nowa reguła</button></div>
-    <div class="list">${ruleRows || '<div class="empty">Brak reguł. Dodaj pierwszą.</div>'}</div>
-    <p class="note">Reguły działają na bieżąco: jeśli wydarzenie spełnia warunek, dostaje dodatkowe przypomnienie albo kategorię.</p>
-  </section>
-
+  const notifSub = !notifSupported() ? 'Ta przeglądarka nie obsługuje powiadomień.' : perm === 'granted' ? 'Włączone.' : perm === 'denied' ? 'Zablokowane. Włącz w Ustawieniach iPhone\'a.' : standalone ? 'Włącz, żeby dostawać przypomnienia.' : 'Najpierw dodaj aplikację do ekranu początkowego.';
+  const catRows = state.cats.map((c) => `<button type="button" class="row" data-act="edit-cat" data-id="${c.id}">${glyphHtml(glyphFor({ cat: c.id }), 'xs')}<span class="rt"><b>${esc(c.name)}</b></span><span class="val">${state.events.filter((e) => e.cat === c.id).length}</span></button>`).join('');
+  const go = (ico, col, title, sub, act) => `<button type="button" class="row" ${act}><span class="tile-s" style="--c:${col}"><span class="ico">${ico}</span></span><span class="rt"><b>${title}</b>${sub ? `<small>${sub}</small>` : ''}</span><span class="ico chev">${ICON.chevR}</span></button>`;
+  const bk = backupInfo();
+  const bkSub = !pcfg ? 'Wymaga połączenia z serwerem' : bk.err ? esc(bk.err) : backupOn() ? (bk.at ? `Włączona. Ostatnio: ${new Date(bk.at).toLocaleString('pl-PL', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}` : 'Włączona') : 'Szyfrowana kopia ostatnich 7 dni';
+  const buf = s.buffer?.def || 0;
+  return `<header class="page-h"><h1>Więcej</h1></header>
+  <section class="sec first"><div class="sec-h"><h2>Ty</h2></div><div class="list">
+    <div class="row"><span class="ico">${ICON.person}</span><span class="rt"><b>Jak mam się do Ciebie zwracać</b><small>Powitanie i asystent</small></span><input type="text" data-in="displayName" value="${esc(s.displayName || '')}" maxlength="24" placeholder="Imię" autocapitalize="words" autocomplete="off" style="max-width:112px;text-align:right" aria-label="Jak mam się do Ciebie zwracać"></div>
+    <div class="row col"><span class="rt"><b>Kolor moich wpisów</b><small>Ten kolor mają wszystkie Twoje wpisy</small></span><div class="pcs">${colorChips(s.share.color)}</div></div>
+  </div></section>
+  <section class="sec"><div class="sec-h"><h2>Asystent i planowanie</h2></div><div class="list">
+    ${go(ICON.sparkle, '#FF3FA4', 'Centrum AI', 'Zapytaj albo zmień plan', 'data-act="ai-open"')}
+    ${go(ICON.brain, '#A45CFF', 'Pamięć preferencji', 'Co asystent wie o Twoich nawykach', 'data-act="prefs"')}
+    ${go(ICON.clock, '#19C8FF', 'Znajdź wolny termin', 'Pierwsze wolne okna', 'data-act="find-slot"')}
+    ${go(ICON.bolt, '#FFC400', 'Bufory czasowe', buf ? `Domyślnie ${buf} min wokół wydarzeń` : 'Margines przed i po wydarzeniach', 'data-act="buffers"')}
+    ${go(ICON.bolt, '#FFC400', 'Automatyzacje', 'Briefy i reguły jeśli–to', 'data-act="tab" data-tab="auto"')}
+    ${go(ICON.bars, '#2E8BFF', 'Statystyki', 'Czas, zadania, porównania', 'data-act="tab" data-tab="stats"')}
+    ${go(ICON.users, '#A45CFF', 'Wspólny kalendarz', 'Zaproszenia, zadania, zakupy', 'data-act="tab" data-tab="shared"')}
+  </div></section>
   <section class="sec"><div class="sec-h"><h2>Powiadomienia</h2></div>
     <div class="list">
       <div class="row"><span class="ico">${ICON.bell}</span><span class="rt"><b>Przypomnienia na telefonie</b><small>${esc(notifSub)}</small></span>${perm === 'default' && notifSupported() ? '<button type="button" class="btn small primary" data-act="enable-notif">Włącz</button>' : perm === 'granted' ? '<button type="button" class="btn small" data-act="test-notif">Test</button>' : ''}</div>
-      <div class="row"><span class="ico">${ICON.bell}</span><span class="rt"><b>Powiadomienia z serwera</b><small>${esc(pushSub)}</small></span>${pcfg ? (pcfg.error ? '<button type="button" class="btn small primary" data-act="push-connect">Połącz ponownie</button>' : '<button type="button" class="btn small" data-act="push-test">Test</button>') + '<button type="button" class="btn small" data-act="push-disconnect">Rozłącz</button>' : pushSupported() && standalone ? '<button type="button" class="btn small primary" data-act="push-connect">Połącz</button>' : ''}</div>
-      ${pcfg ? `<div class="row"><span class="ico">${ICON.cal}</span><span class="rt"><b>Widget (Scriptable)</b><small>Plan dnia na ekranie blokady i głównym. Skopiuj skrypt i wklej go w aplikacji Scriptable.</small></span><button type="button" class="btn small" data-act="copy-widget">Kopiuj skrypt</button></div>` : ''}
-      <div class="row"><span class="ico">${ICON.today}</span><span class="rt"><b>Licznik na ikonie</b><small>Ile rzeczy czeka dziś</small></span><select data-in="badge" aria-label="Licznik na ikonie"><option value="off" ${s.badge === 'off' ? 'selected' : ''}>Wyłączony</option><option value="events" ${s.badge === 'events' ? 'selected' : ''}>Wydarzenia</option><option value="all" ${s.badge === 'all' ? 'selected' : ''}>Wydarzenia i zadania</option></select></div>
-      <div class="row"><span class="ico">${ICON.clock}</span><span class="rt"><b>Domyślne przypomnienie</b><small>Dla nowych wydarzeń</small></span><select data-in="defaultRemind" data-arr="1" aria-label="Domyślne przypomnienie">${[[[], 'Brak'], [[0], 'W chwili startu'], [[5], '5 min'], [[10], '10 min'], [[15], '15 min'], [[30], '30 min'], [[60], '1 godz.']].map(([v, l]) => `<option value='${JSON.stringify(v)}' ${JSON.stringify(s.defaultRemind) === JSON.stringify(v) ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
+      <div class="row"><span class="ico">${ICON.bell}</span><span class="rt"><b>Połączenie z serwerem</b><small>${esc(pushSub)}</small></span>${pcfg ? (pcfg.error ? '<button type="button" class="btn small primary" data-act="push-connect">Połącz ponownie</button>' : '<button type="button" class="btn small" data-act="push-test">Test</button>') + '<button type="button" class="btn small" data-act="push-disconnect">Rozłącz</button>' : pushSupported() && standalone ? '<button type="button" class="btn small primary" data-act="push-connect">Połącz</button>' : ''}</div>
+      ${pcfg ? `<div class="row"><span class="ico">${ICON.cal}</span><span class="rt"><b>Widgety (Scriptable)</b><small>Plan dnia na ekranie blokady i głównym</small></span><button type="button" class="btn small" data-act="copy-widget">Kopiuj skrypt</button></div>` : ''}
+      <div class="row"><span class="ico">${ICON.today}</span><span class="rt"><b>Licznik na ikonie</b></span><select data-in="badge" aria-label="Licznik na ikonie"><option value="off" ${s.badge === 'off' ? 'selected' : ''}>Wyłączony</option><option value="events" ${s.badge === 'events' ? 'selected' : ''}>Wydarzenia</option><option value="all" ${s.badge === 'all' ? 'selected' : ''}>Wydarzenia i zadania</option></select></div>
+      <div class="row"><span class="ico">${ICON.clock}</span><span class="rt"><b>Domyślne przypomnienie</b></span><select data-in="defaultRemind" data-arr="1" aria-label="Domyślne przypomnienie">${[[[], 'Brak'], [[0], 'W chwili startu'], [[5], '5 min'], [[10], '10 min'], [[15], '15 min'], [[30], '30 min'], [[60], '1 godz.']].map(([v, l]) => `<option value='${JSON.stringify(v)}' ${JSON.stringify(s.defaultRemind) === JSON.stringify(v) ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
     </div>
-    ${pcfg ? shareSection() : ''}
-    ${!standalone ? `<p class="note"><b>Instalacja:</b> w Safari dotknij Udostępnij, potem „Dodaj do ekranu początkowego". Dopiero wtedy iOS pozwala na powiadomienia i licznik na ikonie.</p>` : ''}
-    <p class="note">Wibracje przy powiadomieniach zależą od systemu: w Ustawienia, Dźwięki i haptyka, włącz „Odtwarzaj haptykę w trybie cichym".</p>
+    ${!standalone ? '<p class="note"><b>Instalacja:</b> w Safari dotknij Udostępnij, potem „Dodaj do ekranu początkowego”.</p>' : ''}
   </section>
-
-  <section class="sec"><div class="sec-h"><h2>Wygląd</h2></div>
+  <section class="sec"><div class="sec-h"><h2>Ustawienia</h2></div>
     <div class="list">
-      <div class="row"><span class="rt"><b>Motyw</b></span><div class="seg">${[['auto', 'Auto'], ['dark', 'Ciemny'], ['light', 'Jasny']].map(([k, l]) => `<button type="button" class="${s.theme === k ? 'on' : ''}" data-act="set" data-k="theme" data-v="${k}">${l}</button>`).join('')}</div></div>
-      <div class="row" style="flex-wrap:wrap"><span class="rt"><b>Tło</b></span><div class="skins" style="width:100%;margin-top:10px">${[['dusk', 'Zmierzch', '#131029'], ['midnight', 'Północ', '#000000'], ['ink', 'Atrament', '#0e1522'], ['wine', 'Wino', '#1d0d17'], ['forest', 'Las', '#0b1a15'], ['paper', 'Papier', '#f6f1e7']].map(([k, l, c]) => `<button type="button" class="skin ${(s.skin || 'dusk') === k ? 'on' : ''}" data-act="set" data-k="skin" data-v="${k}"><i style="--c:${c}"></i>${l}</button>`).join('')}</div>${(s.skin || 'dusk') === 'paper' ? '<small style="color:var(--text3);margin-top:8px;display:block;width:100%">Papier działa w jasnym motywie.</small>' : ''}</div>
-      <div class="row" style="flex-wrap:wrap"><span class="rt"><b>Kolor akcentu</b></span><div class="chips">${[['zorza', '#ff6a6a'], ['roza', '#ff6fb5'], ['zloto', '#ffbf3f'], ['las', '#3fd08a'], ['mieta', '#3ee0c8'], ['ocean', '#3aa0ff'], ['fiolet', '#9a6bff'], ['grafit', '#a9a9c4']].map(([k, c]) => `<button type="button" class="chip ${!s.accentCustom && s.accent === k ? 'on' : ''}" style="padding:0;width:34px;justify-content:center;background:${c}" data-act="set" data-k="accent" data-v="${k}" aria-label="Akcent ${k}">${!s.accentCustom && s.accent === k ? `<span class="ico" style="color:#fff">${ICON.check}</span>` : ''}</button>`).join('')}<label class="colorpick ${s.accentCustom ? 'on' : ''}" aria-label="Własny kolor"><input type="color" data-in="accentCustom" value="${s.accentCustom || '#ff6a6a'}"></label></div></div>
       <div class="row"><span class="rt"><b>Tydzień zaczyna się</b></span><div class="seg">${[[1, 'Pon'], [0, 'Ndz']].map(([k, l]) => `<button type="button" class="${s.weekStart === k ? 'on' : ''}" data-act="set" data-k="weekStart" data-v="${k}" data-num="1">${l}</button>`).join('')}</div></div>
-      <div class="row"><span class="rt"><b>Pasek dnia</b><small>Zakres godzin na ekranie Dziś</small></span><input type="time" data-in="dayStart" value="${s.dayStart}" aria-label="Początek dnia"><input type="time" data-in="dayEnd" value="${s.dayEnd}" aria-label="Koniec dnia"></div>
-      <div class="row"><span class="ico">${ICON.pin}</span><span class="rt"><b>Pogoda wg lokalizacji</b><small>${s.autoLoc ? (s.locDenied ? 'Brak zgody na lokalizację. Włącz ją w Ustawieniach iOS dla tej aplikacji.' : `Miasto ustala się samo: ${esc(s.city.name)}`) : 'Wyłączone, wybierasz miasto ręcznie'}</small></span><button type="button" class="switch ${s.autoLoc ? 'on' : ''}" role="switch" aria-checked="${!!s.autoLoc}" data-tog="autoLoc"></button></div>
-      <button type="button" class="row" data-act="city"><span class="ico">${ICON.cloud}</span><span class="rt"><b>Pogoda</b><small>${esc(s.city.name)}${s.autoLoc ? ' (z lokalizacji)' : ''}</small></span><span class="val">Zmień ręcznie</span></button>
+      <div class="row"><span class="rt"><b>Godziny dnia</b><small>Dla asystenta i wolnych okien</small></span><input type="time" data-in="dayStart" value="${s.dayStart}" aria-label="Początek dnia"><input type="time" data-in="dayEnd" value="${s.dayEnd}" aria-label="Koniec dnia"></div>
+      <div class="row"><span class="ico">${ICON.pin}</span><span class="rt"><b>Pogoda wg lokalizacji</b><small>${s.autoLoc ? (s.locDenied ? 'Brak zgody na lokalizację w Ustawieniach iOS.' : `Miasto ustala się samo: ${esc(s.city.name)}`) : 'Wyłączone'}</small></span><button type="button" class="switch ${s.autoLoc ? 'on' : ''}" role="switch" aria-checked="${!!s.autoLoc}" data-tog="autoLoc"></button></div>
+      <button type="button" class="row" data-act="city"><span class="ico">${ICON.cloud}</span><span class="rt"><b>Pogoda</b><small>${esc(s.city.name)}</small></span><span class="val">Zmień</span></button>
+      <button type="button" class="row" data-act="lock-setup"><span class="ico">${ICON.shield}</span><span class="rt"><b>Blokada Face ID</b><small>${lockSummary()}</small></span><span class="val">${lockOn() ? 'Wł.' : 'Wył.'}</span></button>
     </div>
   </section>
-
   <section class="sec"><div class="sec-h"><h2>Kategorie</h2><button type="button" class="link" data-act="edit-cat" data-id="">Nowa</button></div><div class="list">${catRows}</div></section>
-
-  <section class="sec"><div class="sec-h"><h2>Dane</h2></div>
+  <section class="sec"><div class="sec-h"><h2>Kopie i dane</h2></div>
     <div class="list">
-      <button type="button" class="row" data-act="export"><span class="ico">${ICON.download}</span><span class="rt"><b>Zapisz kopię zapasową</b><small>Plik JSON ze wszystkim, co masz w aplikacji</small></span></button>
-      <button type="button" class="row" data-act="import"><span class="ico">${ICON.upload}</span><span class="rt"><b>Wczytaj kopię</b><small>Przywróć dane z pliku JSON</small></span></button>
-      <button type="button" class="row" data-act="import-ics"><span class="ico">${ICON.upload}</span><span class="rt"><b>Importuj plik .ics</b><small>Wydarzenia z innych kalendarzy (bez duplikatów)</small></span></button>
-      <button type="button" class="row" data-act="export-ics"><span class="ico">${ICON.cal}</span><span class="rt"><b>Eksport do pliku .ics</b><small>Do innych kalendarzy</small></span></button>
-      <button type="button" class="row" data-act="sample"><span class="ico">${ICON.sparkle}</span><span class="rt"><b>Wczytaj przykładowe dane</b><small>Żeby zobaczyć, jak to wygląda w akcji</small></span></button>
+      ${go(ICON.shield, '#27E05F', 'Kopia na serwerze', bkSub, 'data-act="backup"')}
+      ${go(ICON.history, '#19C8FF', 'Historia zmian', 'Cofnij kilka kroków', 'data-act="history"')}
+      <button type="button" class="row" data-act="export"><span class="ico">${ICON.download}</span><span class="rt"><b>Zapisz kopię do pliku</b></span></button>
+      <button type="button" class="row" data-act="import"><span class="ico">${ICON.upload}</span><span class="rt"><b>Wczytaj kopię z pliku</b></span></button>
+      <button type="button" class="row" data-act="import-ics"><span class="ico">${ICON.upload}</span><span class="rt"><b>Importuj plik .ics</b></span></button>
+      <button type="button" class="row" data-act="export-ics"><span class="ico">${ICON.cal}</span><span class="rt"><b>Eksportuj plik .ics</b></span></button>
       <button type="button" class="row" data-act="wipe"><span class="ico" style="color:var(--danger)">${ICON.trash}</span><span class="rt"><b style="color:var(--danger)">Usuń wszystkie dane</b></span></button>
     </div>
-    <p class="note">Dane są zapisane tylko w tym telefonie. Rób kopię zapasową co jakiś czas, zwłaszcza przed zmianą telefonu.</p>
   </section>
   <div class="spacer"></div>`;
 }

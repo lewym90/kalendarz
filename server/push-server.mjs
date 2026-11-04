@@ -24,6 +24,12 @@ const cfg = {
   get groqKey() { return process.env.GROQ_API_KEY || ''; },
   get groqUrl() { return process.env.GROQ_URL || 'https://api.groq.com/openai/v1/audio/transcriptions'; },
   get groqModel() { return process.env.GROQ_MODEL || 'whisper-large-v3-turbo'; },
+  get geminiKey() { return process.env.GEMINI_API_KEY || ''; },
+  get geminiUrl() { return process.env.GEMINI_URL || 'https://generativelanguage.googleapis.com/v1beta'; },
+  get geminiModel() { return process.env.GEMINI_MODEL || ''; },
+  backupMaxBytes: 6_000_000,
+  backupDirs: 8,
+  backupKeepDays: 7,
 };
 
 export const sha = (s) => crypto.createHash('sha256').update(s).digest('hex');
@@ -306,6 +312,120 @@ export async function flushPeerNotes(now = Date.now()) {
   return sent;
 }
 
+// ---------- Automatyczna kopia zapasowa: serwer trzyma tylko zaszyfrowany blok (klucz zna wyłącznie telefon) ----------
+const bkRoot = () => path.join(path.dirname(cfg.dataFile), 'backups');
+const validBid = (s) => typeof s === 'string' && /^[a-f0-9]{32,64}$/.test(s);
+const bkFiles = (bid) => { try { return fs.readdirSync(path.join(bkRoot(), bid)).filter((f) => /^\d+\.bin$/.test(f)).map((f) => +f.slice(0, -4)).sort((a, b) => b - a); } catch (_) { return []; } };
+
+// Zostaje najnowsza wersja z każdego z ostatnich 7 dni, w których coś zapisano.
+export function backupKeep(list) {
+  const out = []; const days = new Set();
+  for (const at of [...list].sort((a, b) => b - a)) {
+    const d = warsawToday(at);
+    if (days.has(d)) continue;
+    if (days.size >= cfg.backupKeepDays) break;
+    days.add(d); out.push(at);
+  }
+  return out;
+}
+export function backupPut(bid, blob, now = Date.now()) {
+  const dir = path.join(bkRoot(), bid);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(bkRoot(), { recursive: true });
+    if (fs.readdirSync(bkRoot()).length >= cfg.backupDirs) throw Object.assign(new Error('za dużo kopii'), { code: 400 });
+    fs.mkdirSync(dir);
+  }
+  const tmp = path.join(dir, `${now}.tmp`);
+  fs.writeFileSync(tmp, blob, { mode: 0o600 });
+  fs.renameSync(tmp, path.join(dir, `${now}.bin`));
+  const all = bkFiles(bid);
+  const keep = new Set(backupKeep(all));
+  for (const at of all) if (!keep.has(at)) fs.rmSync(path.join(dir, `${at}.bin`), { force: true });
+  return [...keep].sort((a, b) => b - a);
+}
+
+// ---------- Wspólna przestrzeń: wydarzenia dla dwojga, wspólne zadania, lista zakupów ----------
+const KINDS = new Set(['event', 'task', 'shop']);
+const pendSpace = new Map(); // nadawca -> { me, notes, due }
+const space = () => { db.space ||= { v: 0, items: {} }; return db.space; };
+export function spaceSync(id, dev, body, now = Date.now()) {
+  const sp = space();
+  const me = str(body.me, 24).trim();
+  if (me) { dev.me = me; touch(); }
+  const notes = [];
+  for (const c of (Array.isArray(body.changes) ? body.changes : []).slice(0, 200)) {
+    if (!c || typeof c.id !== 'string' || !/^[A-Za-z0-9_-]{4,40}$/.test(c.id) || !KINDS.has(c.kind)) continue;
+    const data = c.deleted ? null : c.data;
+    if (!c.deleted && (!data || typeof data !== 'object' || JSON.stringify(data).length > 4000)) continue;
+    sp.v += 1;
+    sp.items[c.id] = { id: c.id, kind: c.kind, deleted: !!c.deleted, data, by: me, at: now, v: sp.v };
+    if (c.note) notes.push(str(c.note, 120));
+    touch();
+  }
+  const cut = now - 30 * 86400000;
+  for (const [k, it] of Object.entries(sp.items)) if (it.deleted && it.at < cut) delete sp.items[k];
+  if (notes.length && me) {
+    const p = pendSpace.get(id) || { me, notes: [], due: now + 15000 };
+    p.notes.push(...notes); pendSpace.set(id, p);
+  }
+  const since = +body.since || 0;
+  return { v: sp.v, items: Object.values(sp.items).filter((x) => x.v > since) };
+}
+export async function flushSpaceNotes(now = Date.now()) {
+  let sent = 0;
+  for (const [sid, p] of [...pendSpace]) {
+    if (p.due > now) continue;
+    pendSpace.delete(sid);
+    const body = p.notes.slice(0, 3).join(', ') + (p.notes.length > 3 ? '…' : '');
+    for (const [rid, rdev] of Object.entries(db.devices)) {
+      if (rid === sid || !rdev.sub || !rdev.me || rdev.me.toLowerCase() === p.me.toLowerCase()) continue;
+      if (await sendTo(rid, rdev, { id: `space:${sha(sid).slice(0, 8)}:${now}`, title: p.me, body, tag: `space-${sha(sid).slice(0, 8)}`, url: './?shared=1' })) sent++;
+    }
+  }
+  return sent;
+}
+
+// ---------- Asystent: pośrednik do Gemini. Klucz zostaje na serwerze, model można wymienić bez zmian w aplikacji. ----------
+const gem = { model: '' };
+export function bestModel(names) {
+  const score = (n) => { const m = /^gemini-(\d+(?:\.\d+)?)-flash(-lite)?$/.exec(n); return m ? +m[1] * 10 - (m[2] ? 3 : 0) : -1; };
+  return [...names].sort((a, b) => score(b) - score(a)).find((n) => score(n) >= 0) || names.find((n) => /flash/.test(n) && !/preview|exp|image|tts|live|audio/.test(n)) || '';
+}
+async function pickModel(force = false) {
+  if (cfg.geminiModel && !force) return cfg.geminiModel;
+  if (gem.model && !force) return gem.model;
+  const r = await fetch(`${cfg.geminiUrl}/models?pageSize=200`, { headers: { 'x-goog-api-key': cfg.geminiKey }, signal: AbortSignal.timeout(15000) });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw Object.assign(new Error((j.error && j.error.message) || `Gemini ${r.status}`), { status: r.status });
+  gem.model = bestModel((j.models || []).filter((m) => (m.supportedGenerationMethods || []).includes('generateContent')).map((m) => m.name.replace(/^models\//, '')));
+  if (!gem.model) throw new Error('Gemini nie udostępnia żadnego modelu tekstowego');
+  return gem.model;
+}
+async function geminiCall(system, turns, tries = 2) {
+  const model = await pickModel();
+  const res = await fetch(`${cfg.geminiUrl}/models/${model}:generateContent`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': cfg.geminiKey }, signal: AbortSignal.timeout(50000),
+    body: JSON.stringify({ systemInstruction: { parts: [{ text: system }] }, contents: turns.map((t) => ({ role: t.role === 'model' ? 'model' : 'user', parts: [{ text: t.text }] })), generationConfig: { responseMimeType: 'application/json', temperature: 0.2 } }),
+  });
+  const j = await res.json().catch(() => ({}));
+  if (res.status === 404 && tries > 1 && !cfg.geminiModel) { gem.model = ''; await pickModel(true); return geminiCall(system, turns, tries - 1); }
+  if ((res.status === 503 || res.status === 500) && tries > 1) { await new Promise((r) => setTimeout(r, 1500)); return geminiCall(system, turns, tries - 1); }
+  if (!res.ok) throw Object.assign(new Error((j.error && j.error.message) || `Gemini ${res.status}`), { status: res.status });
+  return ((j.candidates && j.candidates[0] && j.candidates[0].content && j.candidates[0].content.parts) || []).map((p) => p.text || '').join('');
+}
+export async function handleAi(body) {
+  if (!cfg.geminiKey) return [503, { error: 'Asystent nie ma jeszcze klucza Gemini na serwerze.', code: 'nokey' }];
+  const system = str(body.system, 30000);
+  const turns = (Array.isArray(body.turns) ? body.turns : []).slice(-14).map((t) => ({ role: t && t.role, text: str(t && t.text, 30000) })).filter((t) => t.text);
+  if (!turns.length) return [400, { error: 'puste polecenie' }];
+  try { return [200, { text: await geminiCall(system, turns) }]; } catch (e) {
+    log('ai:', e.message);
+    if (e.status === 429) return [429, { error: 'Skończył się chwilowy limit darmowego klucza Gemini. Spróbuj za kilka minut.' }];
+    if (/location/i.test(e.message)) return [502, { error: 'Google nie obsługuje tego klucza w lokalizacji serwera.' }];
+    return [502, { error: 'Asystent chwilowo nie odpowiada.' }];
+  }
+}
+
 export async function handle(method, url, headers, body) {
   const route = url.split('?')[0].replace(/\/+$/, '') || '/';
   if (method === 'GET' && route === '/health') return [200, { ok: true, devices: Object.keys(db.devices).length }];
@@ -362,6 +482,20 @@ export async function handle(method, url, headers, body) {
     const seen = new Set();
     return [200, { peers: peers.filter((x) => { const n = x.name.toLowerCase(); if (seen.has(n)) return false; seen.add(n); return true; }), now: Date.now() }];
   }
+  if (method === 'POST' && route === '/backup/put') {
+    if (!validBid(body.bid) || typeof body.blob !== 'string' || !body.blob || body.blob.length > cfg.backupMaxBytes) return [400, { error: 'nieprawidłowa kopia' }];
+    return [200, { ok: true, versions: backupPut(body.bid, body.blob) }];
+  }
+  if (method === 'POST' && route === '/backup/list') {
+    if (!validBid(body.bid)) return [400, { error: 'nieprawidłowa kopia' }];
+    return [200, { versions: bkFiles(body.bid) }];
+  }
+  if (method === 'POST' && route === '/backup/get') {
+    if (!validBid(body.bid) || !bkFiles(body.bid).includes(+body.at)) return [404, { error: 'nie ma takiej kopii' }];
+    return [200, { blob: fs.readFileSync(path.join(bkRoot(), body.bid, `${+body.at}.bin`), 'utf8') }];
+  }
+  if (method === 'POST' && route === '/space/sync') { const r = spaceSync(id, dev, body); saveDb(); return [200, r]; }
+  if (method === 'POST' && route === '/ai') return handleAi(body);
   if (method === 'POST' && route === '/unsubscribe') { delete db.devices[id]; touch(); saveDb(); return [200, { ok: true }]; }
   if (method === 'POST' && route === '/test') {
     const ok = await sendTo(id, dev, { id: `test:${Date.now()}`, title: 'Test powiadomienia z serwera', body: 'Działa. Przypomnienia dotrą, nawet gdy aplikacja jest zamknięta.', url: './' });
@@ -380,7 +514,7 @@ export function createServer() {
     if (limited(ip)) return send(429, { error: 'za dużo żądań' });
     try {
       if (req.method === 'POST' && req.url.split('?')[0].replace(/\/+$/, '') === '/stt') { const [c, o] = await handleStt(req); return send(c, o); }
-      const body = req.method === 'POST' ? await readBody(req) : {};
+      const body = req.method === 'POST' ? await readBody(req, req.url.startsWith('/backup') ? cfg.backupMaxBytes + 2000 : undefined) : {};
       const [code, obj] = await handle(req.method, req.url, req.headers, body);
       send(code, obj);
     } catch (e) { send(e.code === 413 || e.code === 400 ? e.code : 500, { error: e.message || 'błąd' }); }
@@ -392,7 +526,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   loadDb();
   const srv = createServer();
   srv.listen(cfg.port, cfg.host, () => log(`Kalendarz push: ${cfg.host}:${cfg.port}, urządzeń: ${Object.keys(db.devices).length}`));
-  setInterval(() => { runDue().catch((e) => log('tick', e.message)); flushPeerNotes().catch((e) => log('peer', e.message)); }, cfg.tickMs);
+  setInterval(() => { runDue().catch((e) => log('tick', e.message)); flushPeerNotes().catch((e) => log('peer', e.message)); flushSpaceNotes().catch((e) => log('space', e.message)); }, cfg.tickMs);
   const bye = () => { try { if (dirty) saveDb(); } catch (_) { /* nic */ } process.exit(0); };
   process.on('SIGTERM', bye); process.on('SIGINT', bye);
 }

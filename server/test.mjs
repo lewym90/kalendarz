@@ -185,4 +185,42 @@ await t('rozpoznawanie mowy: autoryzacja i przekazanie', async () => {
   fakeStt.close();
   const r2 = await post(`d=${SID}`, token); assert.equal(r2.status, 503);
 });
+await t('kopia: tylko z tokenem, wersje po 1 na dzień, maks. 7 dni', async () => {
+  const [, r] = await call('POST', '/subscribe', { deviceId: 'device_backup_0123456', setup: 'KOD123', subscription: { ...sub, endpoint: 'https://push.example/bk' } });
+  const tok = r.token; const bid = 'a'.repeat(40); const dev = 'device_backup_0123456';
+  assert.equal((await call('POST', '/backup/put', { deviceId: dev, bid, blob: 'x' }))[0], 401);
+  assert.equal((await call('POST', '/backup/put', { deviceId: dev, bid: 'zly', blob: 'x' }, tok))[0], 400);
+  assert.equal((await call('POST', '/backup/put', { deviceId: dev, bid, blob: 'szyfr1' }, tok))[0], 200);
+  const v = (await call('POST', '/backup/list', { deviceId: dev, bid }, tok))[1].versions; assert.equal(v.length, 1);
+  assert.equal((await call('POST', '/backup/get', { deviceId: dev, bid, at: v[0] }, tok))[1].blob, 'szyfr1');
+  assert.equal((await call('POST', '/backup/get', { deviceId: dev, bid, at: 123 }, tok))[0], 404);
+  const D = 86400000; const base = Date.UTC(2026, 10, 20, 12);
+  const list = Array.from({ length: 10 }, (_, i) => base - i * D).concat([base - 3600000]);
+  const keep = S.backupKeep(list); assert.equal(keep.length, 7); assert.equal(keep[0], base); assert.ok(!keep.includes(base - 3600000));
+});
+await t('wspólna przestrzeń: wymiana, znaczniki wersji, powiadomienie drugiej osoby', async () => {
+  const mk = async (n) => { for (const k of Object.keys(S.getDb().devices)) if (k.length && !/space|ai_/.test(k)) delete S.getDb().devices[k]; return (await call('POST', '/subscribe', { deviceId: n, setup: 'KOD123', subscription: { ...sub, endpoint: `https://push.example/${n}` } }))[1].token; };
+  const A = 'device_space_aaaaaaaa'; const B = 'device_space_bbbbbbbb'; const ta = await mk(A); const tb = await mk(B);
+  await call('POST', '/space/sync', { deviceId: B, me: 'Ola', since: 0 }, tb);
+  const r1 = (await call('POST', '/space/sync', { deviceId: A, me: 'Michał', since: 0, changes: [{ id: 'mleko1', kind: 'shop', data: { title: 'Mleko' }, note: 'Lista zakupów: Mleko' }, { id: '!', kind: 'shop', data: {} }, { id: 'zlyrodzaj', kind: 'x', data: {} }] }, ta))[1];
+  assert.equal(r1.items.filter((x) => x.id === 'mleko1').length, 1); assert.equal(r1.items.some((x) => x.id === '!' || x.id === 'zlyrodzaj'), false);
+  const r2 = (await call('POST', '/space/sync', { deviceId: B, since: 0 }, tb))[1]; assert.equal(r2.items.find((x) => x.id === 'mleko1').by, 'Michał');
+  const r3 = (await call('POST', '/space/sync', { deviceId: B, since: r2.v }, tb))[1]; assert.equal(r3.items.length, 0);
+  await call('POST', '/space/sync', { deviceId: B, since: r2.v, changes: [{ id: 'mleko1', kind: 'shop', deleted: true }] }, tb);
+  const r4 = (await call('POST', '/space/sync', { deviceId: A, since: r1.v }, ta))[1]; assert.equal(r4.items[0].deleted, true);
+  const n0 = sent.length; assert.equal(await S.flushSpaceNotes(Date.now() + 60000), 1); assert.equal(sent.length, n0 + 1); assert.equal(sent[sent.length - 1].payload.title, 'Michał');
+});
+await t('asystent: bez klucza jasny błąd, z kluczem wybiera najnowszy model flash', async () => {
+  const [, r] = await call('POST', '/subscribe', { deviceId: 'device_ai_0123456789', setup: 'KOD123', subscription: { ...sub, endpoint: 'https://push.example/ai' } });
+  const nk = await call('POST', '/ai', { deviceId: 'device_ai_0123456789', system: 's', turns: [{ role: 'user', text: 'hej' }] }, r.token);
+  assert.equal(nk[0], 503); assert.equal(nk[1].code, 'nokey');
+  assert.equal(S.bestModel(['gemini-pro', 'gemini-2.5-flash', 'gemini-3.0-flash-lite', 'gemini-3.0-flash', 'gemini-3.0-flash-preview']), 'gemini-3.0-flash');
+  let got = null;
+  const fake = http.createServer((q, w) => { const ch = []; q.on('data', (c) => ch.push(c)); q.on('end', () => { w.setHeader('Content-Type', 'application/json'); if (q.url.startsWith('/models?')) return w.end(JSON.stringify({ models: [{ name: 'models/gemini-3.0-flash', supportedGenerationMethods: ['generateContent'] }] })); got = { url: q.url, key: q.headers['x-goog-api-key'], body: JSON.parse(Buffer.concat(ch)) }; w.end(JSON.stringify({ candidates: [{ content: { parts: [{ text: '{"reply":"ok"}' }] } }] })); }); });
+  await new Promise((x) => fake.listen(0, '127.0.0.1', x));
+  process.env.GEMINI_API_KEY = 'tajny'; process.env.GEMINI_URL = `http://127.0.0.1:${fake.address().port}`;
+  const ok1 = await call('POST', '/ai', { deviceId: 'device_ai_0123456789', system: 'zasady', turns: [{ role: 'user', text: 'co mam jutro?' }] }, r.token);
+  assert.equal(ok1[1].text, '{"reply":"ok"}'); assert.ok(got.url.includes('gemini-3.0-flash:generateContent')); assert.equal(got.key, 'tajny'); assert.equal(got.body.systemInstruction.parts[0].text, 'zasady');
+  delete process.env.GEMINI_API_KEY; delete process.env.GEMINI_URL; fake.close();
+});
 srv.close(); console.log(`\n${ok} testów serwera OK`); process.exit(0);

@@ -1,11 +1,10 @@
 // Service worker: działanie offline, powiadomienia, obsługa kliknięć i (opcjonalnie) push z serwera.
-const VERSION = 'kalendarz-v32';
+const VERSION = 'kalendarz-v40';
 const SHELL = [
   './', 'index.html', 'manifest.webmanifest', 'css/app.css',
-  'js/app.js', 'js/util.js', 'js/store.js', 'js/recur.js', 'js/nlp.js', 'js/notify.js', 'js/weather.js', 'js/ui.js', 'js/editors.js', 'js/screens.js', 'js/extras.js', 'js/data/imieniny.js', 'js/ics.js', 'js/planner.js', 'js/tools.js', 'js/lock.js', 'js/push.js', 'js/peers.js', 'js/geo.js', 'js/voice.js',
-  'fonts/bricolage-grotesque-latin-wght-normal.woff2', 'fonts/bricolage-grotesque-latin-ext-wght-normal.woff2',
-  'fonts/instrument-sans-latin-wght-normal.woff2', 'fonts/instrument-sans-latin-ext-wght-normal.woff2',
-  'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png',
+  'js/app.js', 'js/util.js', 'js/store.js', 'js/recur.js', 'js/nlp.js', 'js/notify.js', 'js/weather.js', 'js/ui.js', 'js/editors.js', 'js/screens.js', 'js/extras.js', 'js/data/imieniny.js', 'js/ics.js', 'js/planner.js', 'js/tools.js', 'js/lock.js', 'js/push.js', 'js/peers.js', 'js/geo.js', 'js/glyphs.js', 'js/sky.js', 'js/plan.js', 'js/backup.js', 'js/space.js', 'js/prefs.js', 'js/ai.js', 'js/more.js', 'js/sheets.js', 'js/voice.js',
+  'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png', 'img/ikonki.webp',
+  ...['swit', 'poranek', 'przedpoludnie', 'poludnie', 'popoludnie', 'zlota', 'zachod', 'zmierzch', 'noc', 'pochmurno-dzien', 'pochmurno-noc', 'deszcz-dzien', 'deszcz-noc', 'snieg-dzien', 'snieg-noc'].map((n) => `img/niebo/${n}.webp`),
 ];
 
 self.addEventListener('install', (e) => {
@@ -20,7 +19,7 @@ self.addEventListener('activate', (e) => {
 
 // Kod (HTML/JS/CSS): najpierw sieć (z obejściem pamięci podręcznej przeglądarki, max 3 s), przy braku sieci — kopia offline.
 // Czcionki i ikony: najpierw kopia, odświeżanie w tle. Zewnętrzne API (pogoda) idzie prosto do sieci.
-const isStatic = (u) => /\.(woff2?|png|jpg|svg|ico)$/i.test(u.pathname);
+const isStatic = (u) => /\.(woff2?|png|jpg|webp|svg|ico)$/i.test(u.pathname);
 self.addEventListener('fetch', (e) => {
   const req = e.request;
   if (req.method !== 'GET') return;

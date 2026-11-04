@@ -109,7 +109,7 @@ export function agendaPayload(now = new Date()) {
     const d0 = addDays(from, i), d1 = addDays(from, i + 1), key = ymd(d0);
     const items = inst.filter((x) => x.start < d1 && x.end > d0).map((x) => ({
       k: 'e', ad: x.allDay ? 1 : 0, s: x.allDay ? '' : hm(x.start < d0 ? d0 : x.start), e: x.allDay ? '' : hm(x.end > d1 ? new Date(d1.getTime() - 60000) : x.end),
-      t: x.title, l: x.ev.loc || '', c: (catOf(x.ev.cat) || {}).color || '', _o: x.start.getTime(),
+      t: x.title, l: x.ev.loc || '', c: state.settings.share?.color || '', _o: x.start.getTime(),
     }));
     for (const x of pinst) {
       if (!(x.start < d1 && x.end > d0)) continue;
@@ -117,7 +117,7 @@ export function agendaPayload(now = new Date()) {
     }
     for (const t of state.tasks) {
       if (t.done || !t.due) continue;
-      if (t.due === key || (i === 0 && t.due < key)) items.push({ k: 't', ad: 0, s: t.dueTime || '', e: '', t: t.title, l: '', c: (catOf(t.cat) || {}).color || '', done: 0, _o: t.dueTime ? 0 : 9e15 });
+      if (t.due === key || (i === 0 && t.due < key)) items.push({ k: 't', ad: 0, s: t.dueTime || '', e: '', t: t.title, l: '', c: state.settings.share?.color || '', done: 0, _o: t.dueTime ? 0 : 9e15 });
     }
     items.sort((a, b) => (a.ad ? 0 : 1) - (b.ad ? 0 : 1) || (a.s || '99:99').localeCompare(b.s || '99:99') || a._o - b._o);
     days.push({ d: key, items: items.map(({ _o, ...r }) => r) });
@@ -178,7 +178,7 @@ export function sharePayload(now = new Date()) {
   if (!sh.on || !name) return null;
   const from = addDays(startOfDay(now), -7), to = addDays(startOfDay(now), 120);
   const hm = (d) => `${pad(d.getHours())}:${pad(d.getMinutes())}`;
-  const events = instancesInRange(state.events, from, to).slice(0, 900).map((x) => {
+  const events = instancesInRange(state.events.filter((e) => !e.sharedId), from, to).slice(0, 900).map((x) => {
     const last = new Date(x.end.getTime() - 1);
     return { d: ymd(x.start), s: x.allDay ? '' : hm(x.start), ed: ymd(x.allDay ? last : x.end), e: x.allDay ? '' : hm(x.end), ad: x.allDay ? 1 : 0, p: x.ev.private ? 1 : 0, t: x.ev.private ? '' : x.title, l: x.ev.private ? '' : (x.ev.loc || '') };
   });

@@ -19,15 +19,18 @@ export function freeGaps(busy, lo, hi) {
 }
 
 // Zwraca { start: Date, end: Date, gap: minuty } — pierwsze wolne okna o długości durMin (jedno na lukę).
-export function findSlots(events, { now = new Date(), durMin = 60, days = 7, from = '09:00', to = '18:00', weekdaysOnly = false, count = 8, step = 15, buffer = 0 } = {}) {
+export function findSlots(events, { now = new Date(), durMin = 60, days = 7, from = '09:00', to = '18:00', weekdaysOnly = false, count = 8, step = 15, buffer = 0, bufferOf = null, allDayBusy = false } = {}) {
   const out = [];
   const day0 = startOfDay(now);
-  const insts = instancesInRange(events, day0, addDays(day0, days + 1)).filter((i) => !i.allDay);
+  const all = instancesInRange(events, day0, addDays(day0, days + 1));
+  const insts = all.filter((i) => !i.allDay);
+  const blocked = allDayBusy ? all.filter((i) => i.allDay) : [];
   for (let k = 0; k < days && out.length < count; k++) {
     const d = addDays(day0, k);
     if (weekdaysOnly && (d.getDay() === 0 || d.getDay() === 6)) continue;
+    if (blocked.some((i) => i.start < addDays(d, 1) && i.end > d)) continue;
     const busy = insts
-      .map((i) => [Math.round((i.start - d) / 60000) - buffer, Math.round((i.end - d) / 60000) + buffer])
+      .map((i) => { const b = bufferOf ? bufferOf(i.ev) : buffer; return [Math.round((i.start - d) / 60000) - b, Math.round((i.end - d) / 60000) + b]; })
       .filter(([a, b]) => b > 0 && a < 1440);
     let lo = toMin(from);
     if (k === 0) lo = Math.max(lo, now.getHours() * 60 + now.getMinutes() + 5);

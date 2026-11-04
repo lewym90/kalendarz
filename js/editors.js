@@ -12,6 +12,10 @@ import { openSheet, closeSheet, toast, rerender, confirmSheet, nav } from './ui.
 import { searchCity } from './weather.js';
 import { findSlots } from './planner.js';
 import { sttAvailable, sttTranscribe, sttWarm } from './push.js';
+import { bufferOf } from './tools.js';
+import { isCommand, openAssistant } from './ai.js';
+import { inviteEvent, spaceReady } from './space.js';
+import { peerList } from './peers.js';
 
 const REMIND_OPTS = [0, 5, 10, 15, 30, 60, 120, 1440, 2880];
 export const shortRemind = (m) => (m === 0 ? 'o starcie' : m < 60 ? `${m} min` : m < 1440 ? `${m / 60} godz.` : m === 1440 ? '1 dzień' : `${m / 1440} dni`);
@@ -35,7 +39,7 @@ const examples = [
 ];
 
 // ---------- Szybkie dodawanie ----------
-export function openQuickAdd({ text = '', mode = 'event', ctxDate = null } = {}) {
+export function openQuickAdd({ text = '', mode = 'event', ctxDate = null, voice = false } = {}) {
   let kind = mode;
   let forced = mode === 'task' ? 'task' : null;
   let parsed = null;
@@ -60,6 +64,7 @@ export function openQuickAdd({ text = '', mode = 'event', ctxDate = null } = {})
         <button type="button" class="qa-mic" id="qa-mic" aria-label="Dyktuj głosem">${ICON.mic}</button>
       </form>
       <div class="mic-hint" id="qa-mic-hint" hidden></div>
+      <button type="button" class="link qa-ai" id="qa-ai" hidden>To polecenie? Zapytaj asystenta</button>
       <div class="qp" id="qa-prev"><div id="qa-sum"></div><div id="qa-pick"></div><div class="qa-warn" id="qa-warn" hidden></div></div>
       <div class="lbl">Ostatnio dodawane</div>
       <div class="chips scroll" id="qa-sug">${sug.map((x, i) => `<button type="button" class="chip hab" data-s="${i}">${esc(x.title)}${x.meta ? `<small>${esc(x.meta)}</small>` : ''}</button>`).join('')}</div>
@@ -101,6 +106,7 @@ export function openQuickAdd({ text = '', mode = 'event', ctxDate = null } = {})
     addBtn.disabled = !ok;
     moreBtn.disabled = !ok;
     addBtn.textContent = all.length > 1 ? `Dodaj ${all.length}` : 'Dodaj';
+    $('#qa-ai', el).hidden = !isCommand(input.value);
     renderPreview(p);
   };
 
@@ -193,10 +199,12 @@ export function openQuickAdd({ text = '', mode = 'event', ctxDate = null } = {})
     if (ev.allDay) return;
     const s = parseDT(ev.start);
     const e = parseDT(ev.end);
-    const hit = instancesInRange(state.events, startOfDay(s), addDays(startOfDay(s), 2)).filter((i) => !i.allDay && i.start < e && i.end > s && i.ev.title !== p.title);
+    const near = (i) => { const b = Math.max(bufferOf(i.ev), bufferOf(ev)) * 60000; return i.start.getTime() - b < e.getTime() && i.end.getTime() + b > s.getTime(); };
+    const hit = instancesInRange(state.events, startOfDay(s), addDays(startOfDay(s), 2)).filter((i) => !i.allDay && near(i) && i.ev.title !== p.title);
     if (!hit.length) return;
     const names = hit.slice(0, 2).map((i) => `<b>${esc(i.ev.title)}</b> ${fmtTime(i.start)}–${fmtTime(i.end)}`).join(', ');
-    warn.innerHTML = `<span class="ico">${ICON.bolt}</span><span class="grow">Nakłada się z: ${names}</span><button type="button" class="link" data-free="1">Wolny termin</button>`;
+    const real = hit.some((i) => i.start < e && i.end > s);
+    warn.innerHTML = `<span class="ico">${ICON.bolt}</span><span class="grow">${real ? 'Nakłada się z' : 'Za mały odstęp od'}: ${names}</span><button type="button" class="link" data-free="1">Wolny termin</button>`;
     warn.hidden = false;
   };
 
@@ -274,6 +282,7 @@ export function openQuickAdd({ text = '', mode = 'event', ctxDate = null } = {})
     const t = fixVoice(raw, extra);
     const base = input.value.trim();
     input.value = (base ? base + ' ' : '') + t;
+    if (isCommand(input.value)) { const cmd = input.value; closeSheet(h); openAssistant(cmd); return; }
     run();
   };
   const voicePrompt = () => {
@@ -365,6 +374,7 @@ export function openQuickAdd({ text = '', mode = 'event', ctxDate = null } = {})
   voiceCfg.hq = !!state.settings.voiceHq2;
   if (canRecord() && modelReady() && !(SR && !standalone)) setTimeout(() => warm(), 600);
   input.addEventListener('input', () => hint(''));
+  $('#qa-ai', el).addEventListener('click', () => { const cmd = input.value; closeSheet(h); openAssistant(cmd); });
   input.addEventListener('input', run);
   $('#qa-form', el).addEventListener('submit', (e) => { e.preventDefault(); submit(); });
   addBtn.addEventListener('click', () => submit(false));
@@ -393,7 +403,7 @@ export function openQuickAdd({ text = '', mode = 'event', ctxDate = null } = {})
       const day = startOfDay(parseDT(ev.start));
       const from = day > startOfDay(new Date()) ? day : new Date();
       const want = parseDT(ev.start);
-      const sl = findSlots(state.events, { now: from, durMin: dur, days: 14, from: '07:00', to: '22:00', count: 40, step: 15 }).filter((x) => x.start >= from).sort((a, b) => Math.abs(a.start - want) - Math.abs(b.start - want))[0];
+      const sl = findSlots(state.events, { now: from, durMin: dur, days: 14, from: '07:00', to: '22:00', count: 40, step: 15, bufferOf }).filter((x) => x.start >= from).sort((a, b) => Math.abs(a.start - want) - Math.abs(b.start - want))[0];
       if (!sl) { toast('Brak wolnego terminu w ciągu dwóch tygodni'); return; }
       ov.date = ymd(sl.start);
       ov.time = `${pad(sl.start.getHours())}:${pad(sl.start.getMinutes())}`;
@@ -444,7 +454,7 @@ export function openQuickAdd({ text = '', mode = 'event', ctxDate = null } = {})
   }, 2600);
 
   run();
-  setTimeout(() => input.focus(), 60);
+  if (voice) micBtn.click(); else setTimeout(() => input.focus(), 60);
   return h;
 }
 
@@ -457,7 +467,7 @@ export function defaultDraftFor(date, hour) {
 }
 
 // ---------- Edytor wydarzenia ----------
-export function openEventEditor({ inst = null, ev = null, draft = null } = {}) {
+export function openEventEditor({ inst = null, ev = null, draft = null, shared = false } = {}) {
   const existing = inst ? inst.ev : ev;
   let base;
   let s;
@@ -482,7 +492,10 @@ export function openEventEditor({ inst = null, ev = null, draft = null } = {}) {
     bday: !!base.bday,
     byear: base.byear || null,
     priv: !!base.private,
+    shared: !!base.sharedId || (shared && !existing),
   };
+  const wasShared = !!base.sharedId;
+  const partner = () => peerList()[0]?.name || 'drugą osobą';
   const recurringExisting = !!(existing && existing.rrule);
   const isNew = !existing;
 
@@ -518,6 +531,7 @@ export function openEventEditor({ inst = null, ev = null, draft = null } = {}) {
         <div class="field"><label class="grow">Do dnia (opcjonalnie)</label><input id="e-until" type="date" value="${d.rrule.until || ''}"></div>` : ''}
       <div class="field" style="margin-top:12px"><span class="ico">${ICON.sparkle}</span><label class="grow">To urodziny<small style="display:block;color:var(--text2);font-size:12.5px">Co roku, z wiekiem w tytule</small></label><button type="button" class="switch ${d.bday ? 'on' : ''}" role="switch" aria-checked="${!!d.bday}" data-t="bday"></button></div>
       <div class="field"><span class="ico">${ICON.lock}</span><label class="grow">Prywatne<small style="display:block;color:var(--text2);font-size:12.5px">Druga osoba zobaczy tylko „Zajęte", bez tytułu</small></label><button type="button" class="switch ${d.priv ? 'on' : ''}" role="switch" aria-checked="${!!d.priv}" data-t="priv"></button></div>
+      ${spaceReady() && (!recurringExisting || wasShared) ? `<div class="field"><span class="ico">${ICON.users}</span><label class="grow">Wspólne z ${esc(partner())}<small style="display:block;color:var(--text2);font-size:12.5px">${wasShared ? 'Zmiany widzicie oboje' : 'Dostanie zaproszenie do przyjęcia'}</small></label>${wasShared ? '' : `<button type="button" class="switch ${d.shared ? 'on' : ''}" role="switch" aria-checked="${d.shared}" data-t="shared"></button>`}</div>` : ''}
       ${d.bday ? `<div class="field"><label class="grow">Rok urodzenia (opcjonalnie)</label><input id="e-byear" type="number" inputmode="numeric" min="1900" max="2100" placeholder="np. 1990" value="${d.byear || ''}" style="max-width:100px;text-align:right"></div>` : ''}
       <div class="lbl">Przypomnienia</div>
       <div class="chips">${REMIND_OPTS.map((m) => `<button type="button" class="chip ${d.reminders.includes(m) ? 'on' : ''}" data-r="${m}">${m === 0 ? 'W chwili startu' : shortRemind(m)}</button>`).join('')}</div>
@@ -630,6 +644,7 @@ export function openEventEditor({ inst = null, ev = null, draft = null } = {}) {
       return redraw();
     }
     if (t.dataset.t === 'priv') { d.priv = !d.priv; haptic(); redraw(); return; }
+    if (t.dataset.t === 'shared') { d.shared = !d.shared; haptic(); redraw(); return; }
     if (t.dataset.t === 'bday') {
       d.bday = !d.bday;
       if (d.bday) {
@@ -685,10 +700,12 @@ export function openEventEditor({ inst = null, ev = null, draft = null } = {}) {
       if (isNew) {
         const evn = newEvent({ ...common, start: fmtDT(d.s), end: fmtDT(d.e), rrule: rr });
         addEvent(evn);
+        if (d.shared) inviteEvent(evn);
       } else if (!recurringExisting) {
         const p = { ...common, start: fmtDT(d.s), end: fmtDT(d.e), rrule: rr };
         applyCreationRules(p);
-        updateEvent(existing.id, p);
+        const upd = updateEvent(existing.id, p);
+        if (d.shared && !wasShared && upd) inviteEvent(upd);
       } else if (d.scope === 'one') {
         detachOccurrence(inst, { ...common, start: fmtDT(d.s), end: fmtDT(d.e), rrule: null });
       } else if (d.scope === 'following') {

@@ -10,7 +10,12 @@ export const nav = {
   selected: today0,
   agendaDays: 45,
   taskFilter: 'all',
-  showPast: false,
+  filterWho: 'all',
+  filterCats: [],
+  showFilter: false,
+  statKind: 'week',
+  shAssign: '',
+  back: 'hub',
 };
 try {
   const saved = JSON.parse(localStorage.getItem(NAV_KEY) || 'null');
@@ -18,11 +23,13 @@ try {
     nav.tab = saved.tab || nav.tab;
     nav.calView = saved.calView || nav.calView;
     nav.taskFilter = saved.taskFilter || nav.taskFilter;
+    nav.filterWho = saved.filterWho || nav.filterWho;
+    nav.filterCats = saved.filterCats || nav.filterCats;
   }
 } catch (_) { /* ignoruj */ }
 
 export function saveNav() {
-  try { localStorage.setItem(NAV_KEY, JSON.stringify({ tab: nav.tab, calView: nav.calView, taskFilter: nav.taskFilter })); } catch (_) { /* ignoruj */ }
+  try { localStorage.setItem(NAV_KEY, JSON.stringify({ tab: nav.tab, calView: nav.calView, taskFilter: nav.taskFilter, filterWho: nav.filterWho, filterCats: nav.filterCats })); } catch (_) { /* ignoruj */ }
 }
 
 let renderFn = () => {};
