@@ -102,6 +102,7 @@ export function briefBody(dev, a, devices = db.devices) {
         const n = d.share.name.toLowerCase();
         if (seen.has(n)) continue;
         seen.add(n); peers.push(...d.share.events);
+        break; // dla dwojga liczy się tylko najświeższe urządzenie drugiej osoby
       }
     }
     const forDay = (k) => {
@@ -263,7 +264,7 @@ export function cleanShare(a) {
   if (!name) return null;
   const events = (Array.isArray(a.events) ? a.events : []).slice(0, 900).filter((x) => x && RE_D.test(x.d || '')).map((x) => ({
     d: x.d, s: RE_T.test(x.s || '') ? x.s : '', ed: RE_D.test(x.ed || '') ? x.ed : x.d, e: RE_T.test(x.e || '') ? x.e : '', ad: x.ad ? 1 : 0,
-    t: x.p ? '' : str(x.t, 100), l: x.p ? '' : str(x.l, 60), p: x.p ? 1 : 0,
+    t: x.p ? '' : str(x.t, 100), l: x.p ? '' : str(x.l, 60), p: x.p ? 1 : 0, c: x.p ? '' : str(x.c, 24),
   }));
   return { name, color: /^#[0-9a-fA-F]{6}$/.test(a.color || '') ? a.color : '#34d3ff', events, gen: Date.now() };
 }

@@ -4,8 +4,8 @@ const norm = (s) => (s || '').toLowerCase().replace(/[ąćęłńóśźż]/g, (c)
 const RULES = [
   [/\b(silowni|trening|fitness|crossfit|sztang)/, 0], [/\b(bieg|jogging|parkrun|maraton)/, 1], [/\b(rower|kolarz)/, 2], [/\b(basen|plywa|aquapark)/, 3],
   [/\b(mecz|pilk|futbol|orlik)/, 4], [/\b(tenis|squash|padel|badminton)/, 5], [/\b(wycieczk|gory|szlak|trekking|wedrowk)/, 6], [/\b(joga|yoga|medytac|pilates)/, 7],
-  [/\b(dentyst|stomatolog|zab)/, 8], [/\b(lekarz|przychodni|internist|wizyt\w* u)/, 9], [/\b(tabletk|leki?\b|apteka|recept)/, 10], [/\b(badani|kardiolog|morfologi|usg|rezonans)/, 11],
-  [/\b(szczepi|krew|krwi|pobrani)/, 12], [/\b(okulist|optyk|okular)/, 13], [/\b(fryzjer|barber|strzyzeni)/, 14], [/\b(spa|masaz|kosmetycz|manicure|paznok)/, 15],
+  [/\b(dentyst|stomatolog|ortodont|protetyk|zab|zeb|higienizacj|implant)/, 8], [/\b(lekarz|przychodni|internist|wizyt\w* u|onkolog|neurolog|ortoped|ginekolog|dermatolog|urolog|endokrynolog|psycholog|psychiatr|laryngolog|pediatr|diabetolog|alergolog|reumatolog|chirurg|fizjoterap|rehabilit)/, 9], [/\b(tabletk|leki?\b|apteka|recept)/, 10], [/\b(badani|kardiolog|morfologi|usg|rezonans)/, 11],
+  [/\b(szczepi|krew|krwi|pobrani)/, 12], [/\b(okulist|optyk|okular)/, 13], [/\b(fryzjer|barber|strzyzeni)/, 14], [/\b(paznok|hybryd|manicure|pedicure|stopki|stopek|kosmetycz|rzes|brwi|henn|depilac|lakier)/, 15], [/\b(spa|masaz)/, 7],
   [/\b(praca|pracy|biuro|dyzur|sluzb|zmiana)\b/, 16], [/\b(komputer|laptop|kod|programow|aplikacj)/, 17], [/\b(telefon|zadzwon|rozmow)/, 18], [/\b(mail|e-mail|poczt|list\b|odpisa)/, 19],
   [/\b(dokument|urzad|wniosek|umow|papier|ksiegow)/, 20], [/\b(prezentac|szkoleni|webinar|konferencj)/, 21], [/\b(spotkani|klient|narad|zebrani)/, 22], [/\b(szkol|kurs|egzamin|studi|nauka|lekcj)/, 23],
   [/\b(lunch|obiad|kolacj|restaurac|pizza|sniadani|burger|sushi)/, 24], [/\b(kaw|kawiarni|espresso)/, 25], [/\b(wino|piwo|pub|drink|impreza)/, 26], [/\b(zakup|sklep|biedronk|lidl|kaufland|auchan|dino|zabk)/, 27],

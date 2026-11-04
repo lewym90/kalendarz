@@ -180,7 +180,7 @@ export function sharePayload(now = new Date()) {
   const hm = (d) => `${pad(d.getHours())}:${pad(d.getMinutes())}`;
   const events = instancesInRange(state.events.filter((e) => !e.sharedId), from, to).slice(0, 900).map((x) => {
     const last = new Date(x.end.getTime() - 1);
-    return { d: ymd(x.start), s: x.allDay ? '' : hm(x.start), ed: ymd(x.allDay ? last : x.end), e: x.allDay ? '' : hm(x.end), ad: x.allDay ? 1 : 0, p: x.ev.private ? 1 : 0, t: x.ev.private ? '' : x.title, l: x.ev.private ? '' : (x.ev.loc || '') };
+    return { d: ymd(x.start), s: x.allDay ? '' : hm(x.start), ed: ymd(x.allDay ? last : x.end), e: x.allDay ? '' : hm(x.end), ad: x.allDay ? 1 : 0, p: x.ev.private ? 1 : 0, c: x.ev.private ? '' : x.ev.cat, t: x.ev.private ? '' : x.title, l: x.ev.private ? '' : (x.ev.loc || '') };
   });
   return { name, color: sh.color, events };
 }

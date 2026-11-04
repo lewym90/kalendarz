@@ -1,6 +1,10 @@
 import './setup.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
+localStorage.setItem('kalendarz.push', JSON.stringify({ url: 'x', token: 't', deviceId: 'd' }));
+localStorage.setItem('kalendarz.peers', JSON.stringify({ at: 1, list: [
+  { id: 'old', name: 'Ania', color: '#A45CFF', gen: 100, events: [{ d: '2026-11-06', s: '15:30', e: '16:30', ed: '2026-11-06', t: 'USG', c: 'zdrowie' }] },
+  { id: 'new', name: 'Myszka', color: '#A45CFF', gen: 200, events: [{ d: '2026-11-06', s: '15:30', e: '16:30', ed: '2026-11-06', t: 'USG', c: 'zdrowie' }] }] }));
 const S = await import('../js/store.js');
 const { state, newEvent, addEvent, addTask, newTask, updateTask, rolloverTasks, undo, historyList, undoTo, migrate, DEFAULT_CATS } = S;
 const { findSlots } = await import('../js/planner.js');
@@ -82,6 +86,21 @@ test('ikonki: treść, a potem kategoria', () => {
   const g = (title, cat = 'inne') => glyphFor({ title, cat });
   assert.equal(g('Siłownia'), 0); assert.equal(g('Dentysta'), 8); assert.equal(g('Lunch z Anią'), 24); assert.equal(g('Spotkanie z klientem'), 22);
   assert.equal(g('Fryzjer'), 14); assert.equal(g('Coś', 'finanse'), 48); assert.equal(g('Coś'), 56); assert.equal(glyphFor({ title: 'Ola', bday: true }), 29);
+});
+test('stare urządzenie drugiej osoby nie dubluje wpisów, kategoria dochodzi', async () => {
+  const P = await import('../js/peers.js');
+  state.settings.share.view = true;
+  assert.equal(P.peerList().length, 1); assert.equal(P.peerList()[0].name, 'Myszka');
+  const e = P.peerEvents(); assert.equal(e.length, 1); assert.equal(e[0].cat, 'zdrowie');
+  state.settings.share.view = false;
+});
+test('ikonki: lekarze, ortodonta, kosmetyka', () => {
+  const g = (title) => glyphFor({ title, cat: 'inne' });
+  for (const t of ['Onkolog Myszka', 'Neurolog Myszka', 'Ginekolog']) assert.equal(g(t), 9, t);
+  assert.equal(g('Ortodonta'), 8);
+  for (const t of ['Paznokcie', 'Myszka paznokcie', 'Stópki', 'Kosmetyczka', 'Hybrydy']) assert.equal(g(t), 15, t);
+  assert.equal(g('Masaż'), 7);
+  assert.equal(glyphFor({ title: 'Kontrola', cat: 'zdrowie' }), 11);
 });
 test('rozpoznawanie poleceń dla asystenta', () => {
   for (const t of ['Co mam jutro?', 'znajdź trzy godziny na projekt', 'Wypadło mi pilne spotkanie o 16, dopasuj resztę dnia', 'przenieś zaległe zadania', 'czy mam wolny piątek', 'jutro nie zdążę na 9']) assert.ok(isCommand(t), t);

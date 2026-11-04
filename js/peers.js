@@ -11,17 +11,19 @@ const subs = new Set();
 export const onPeers = (fn) => { subs.add(fn); return () => subs.delete(fn); };
 
 export const peersOn = () => !!(state.settings.share && state.settings.share.view) && !!pushConfig();
-export const peerList = () => cache.list;
+// Aplikacja jest dla dwojga: druga osoba to zawsze najświeższe urządzenie. Stare, po reinstalacji lub zmianie imienia, nie dubluje wpisów.
+const newest = () => [...cache.list].sort((a, b) => (b.gen || 0) - (a.gen || 0)).slice(0, 1);
+export const peerList = () => newest();
 
 export function peerEvents() {
   if (!peersOn()) return [];
   if (built && built.src === cache) return built.out;
   const out = [];
-  for (const p of cache.list) {
+  for (const p of newest()) {
     const peer = { id: p.id, name: p.name, color: p.color };
     p.events.forEach((e, i) => {
       out.push({
-        id: `p:${p.id}:${i}`, title: e.p ? 'Zajęte' : (e.t || 'Wydarzenie'), loc: e.l || '', notes: '', cat: 'inne', rrule: null, exdates: [], reminders: [], private: !!e.p,
+        id: `p:${p.id}:${i}`, title: e.p ? 'Zajęte' : (e.t || 'Wydarzenie'), loc: e.l || '', notes: '', cat: e.c || 'inne', rrule: null, exdates: [], reminders: [], private: !!e.p,
         allDay: !!e.ad, start: `${e.d}T${e.ad ? '00:00' : e.s || '00:00'}`, end: `${e.ed || e.d}T${e.ad ? '23:59' : e.e || e.s || '00:00'}`, peer,
       });
     });
