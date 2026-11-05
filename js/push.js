@@ -135,7 +135,7 @@ export function agendaPayload(now = new Date()) {
   }
   const pcol = pev.length ? pev[0].peer.color : '';
   const c = state.settings.city || {};
-  return { days, cnt, pcnt, pcol, geo: { n: c.name || '', lat: c.lat, lon: c.lon } };
+  return { days, cnt, pcnt, pcol, mcol: state.settings.share?.color || '', geo: { n: c.name || '', lat: c.lat, lon: c.lon } };
 }
 
 // Rozpoznawanie mowy na serwerze (usługa kalendarz-stt). Próbki 16 kHz → int16, token w nagłówku.

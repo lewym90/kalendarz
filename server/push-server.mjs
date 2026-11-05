@@ -252,7 +252,8 @@ export function cleanAgenda(a) {
   const pcol = /^#[0-9a-fA-F]{6}$/.test(a.pcol || '') ? a.pcol : '';
   const g = a.geo || {};
   const geo = Number.isFinite(+g.lat) && Number.isFinite(+g.lon) && Math.abs(+g.lat) <= 90 && Math.abs(+g.lon) <= 180 ? { n: str(g.n, 40), lat: +g.lat, lon: +g.lon } : null;
-  return { gen: Date.now(), days, cnt, pcnt, pcol, geo };
+  const mcol = /^#[0-9a-fA-F]{6}$/.test(a.mcol || '') ? a.mcol : '';
+  return { gen: Date.now(), days, cnt, pcnt, pcol, mcol, geo };
 }
 
 const RE_D = /^\d{4}-\d{2}-\d{2}$/;
