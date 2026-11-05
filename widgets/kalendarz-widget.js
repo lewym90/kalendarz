@@ -104,6 +104,8 @@ function model(data, now = new Date()) {
   const dayOf = (k) => ((data && data.days) || []).find((d) => d.d === k) || { d: k, items: [] };
   const mk = (day) => dayOf(day).items.map((i) => ({ ...i, start: i.ad ? at(day, '') : at(day, i.s), end: i.ad ? at(day, '', true) : (i.e ? at(day, i.e) : at(day, i.s)) }));
   const t = mk(today), tm = mk(tomorrow);
+  // Jutro: wszystko po kolei, także wpisy drugiej osoby; najpierw całodniowe, potem wg godziny, na końcu zadania.
+  const tmAll = [...tm.filter((i) => i.k === 'e' && i.ad).map((i) => ({ ...i, label: 'cały dz.' })), ...tm.filter((i) => i.k === 'e' && !i.ad).sort((a, b) => a.start - b.start), ...tm.filter((i) => i.k === 't')];
   const own = (i) => !i.w;
   const events = t.filter((i) => i.k === 'e' && !i.ad && own(i)), allday = t.filter((i) => i.k === 'e' && i.ad && own(i)), tasks = t.filter((i) => i.k === 't');
   const ongoing = events.find((i) => i.start <= now && now < i.end) || null;
@@ -117,7 +119,7 @@ function model(data, now = new Date()) {
   tasks.forEach((i) => rows.push(i));
   const cnt = { ...((data && data.cnt) || {}) };
   ((data && data.days) || []).forEach((d) => { const n = d.items.filter(own).length; if (n && !cnt[d.d]) cnt[d.d] = n; });
-  return { now, tm: tm.filter(own), ongoing, upcoming, allday, tasks, rows, remaining: upcoming.length + (ongoing ? 1 : 0) + tasks.length + allday.length, tomorrowFirst: tm.filter(own).find((i) => i.k === 'e') || tm.filter(own)[0] || null, cnt, pcnt: (data && data.pcnt) || {}, pcol: (data && data.pcol) || '#34d3ff', mcol: (data && data.mcol) || ACCENT };
+  return { now, tm: tm.filter(own), ongoing, upcoming, allday, tasks, rows, remaining: upcoming.length + (ongoing ? 1 : 0) + tasks.length + allday.length, tmAll, tomorrowFirst: tmAll[0] || null, cnt, pcnt: (data && data.pcnt) || {}, pcol: (data && data.pcol) || '#34d3ff', mcol: (data && data.mcol) || ACCENT };
 }
 const line = (i) => `${i.k === 't' ? '☐ ' : ''}${i.s ? i.s + ' ' : ''}${i.t}`;
 
@@ -193,15 +195,24 @@ function planRow(p, i, now, o) {
   return r;
 }
 function leftRow(p, o, fn) { const r = p.addStack(); r.centerAlignContent(); r.spacing = 6; if (o && o.w) r.size = new Size(o.w, o.h || 0); fn(r); r.addSpacer(); return r; }
+function tomorrowRows(p, m, free, o) {
+  if (free < 2 || !m.tmAll.length) return;
+  if (free === 2 && m.tmAll.length > 1) { const f = m.tmAll[0]; leftRow(p, { w: o.w, h: o.h }, (r) => { txt(r, 'Jutro', o.size - 1, 'b', C(ACCENT)); txt(r, `${f.label || f.s || ''} ${f.t}`.trim(), o.size - 1, 'm', WHITE()); txt(r, `+${m.tmAll.length - 1}`, o.size - 1, 'b', DIM()); }); return; }
+  leftRow(p, { w: o.w, h: o.size + 3 }, (r) => txt(r, 'Jutro', o.size - 1, 'b', C(ACCENT)));
+  const fit = free - 1, n = m.tmAll.length <= fit ? fit : fit - 1;
+  m.tmAll.slice(0, n).forEach((i) => planRow(p, i, m.now, o));
+  if (m.tmAll.length > n) leftRow(p, { w: o.w }, (r) => txt(r, `+${m.tmAll.length - n} jutro`, o.size - 2, 'm', FAINT()));
+}
 function plan(p, m, max, o) {
   if (!m.rows.length) {
     leftRow(p, { w: o.w, h: o.h }, (r) => { icon(r, 'checkmark.circle', o.size + 4, C(ACCENT)); txt(r, 'Dziś bez planów', o.size + 1, 'b', WHITE()); });
-    if (m.tomorrowFirst) leftRow(p, { w: o.w }, (r) => txt(r, `Jutro: ${line(m.tomorrowFirst)}`, o.size - 1, 'm', DIM(), 2));
+    if (!o.noTomorrow) tomorrowRows(p, m, max - 1, o);
     return;
   }
   const n = m.rows.length <= max ? max : max - 1;
   m.rows.slice(0, n).forEach((i) => planRow(p, i, m.now, o));
   if (m.rows.length > n) leftRow(p, { w: o.w }, (r) => txt(r, `+${m.rows.length - n} więcej`, o.size - 2, 'm', FAINT()));
+  else if (!o.noTomorrow) tomorrowRows(p, m, max - m.rows.length, o);
 }
 function weatherRow(p, wx, o) {
   const r = p.addStack(); r.centerAlignContent(); r.spacing = 7;
@@ -254,7 +265,7 @@ function backdrop(w, family, m, wx, size) {
   dc.size = size; dc.opaque = true; dc.respectScreenScale = true;
   dc.setFillColor(C('#0d1420')); dc.fillRect(new Rect(0, 0, size.width, size.height));
   const photo = aImg(`niebo/${skyName(m.now, wx)}.jpg`);
-  const n = m.rows.length;
+  const n = m.rows.length + (family === 'large' || m.rows.length > 2 ? 0 : Math.min(m.tmAll.length, 3));
   if (photo) {
     if (family === 'medium') { const pw = size.width * 1.06, ph = pw / 1.5; dc.drawImageInRect(photo, new Rect(size.width * 0.74 - pw / 2, size.height - ph * 0.82, pw, ph)); }
     else { const ph = Math.max(size.height * 1.05, size.width / 1.5), pw = ph * 1.5; dc.drawImageInRect(photo, new Rect((size.width - pw) / 2, size.height - ph * 0.86, pw, ph)); }
@@ -335,12 +346,12 @@ function homeWidget(w, family, m, wx, stale) {
   const manyL = m.rows.length > 8;
   const rc = mid.addStack(); rc.layoutVertically(); rc.size = new Size(RWl, MH); rc.spacing = manyL ? 1 : 3;
   txt(rc, `Plan dnia · ${m.remaining}`, 12, 'b', DIM());
-  if (manyL) plan(rc, m, 10, { size: 12, h: 18, tw: 33, w: RWl }); else plan(rc, m, 8, { size: 12, h: 19, tw: 33, w: RWl });
+  if (manyL) plan(rc, m, 10, { size: 12, h: 18, tw: 33, w: RWl, noTomorrow: true }); else plan(rc, m, 8, { size: 12, h: 19, tw: 33, w: RWl, noTomorrow: true });
   rc.addSpacer();
   const tmr = col.addStack(); tmr.size = new Size(CW, 24); tmr.centerAlignContent(); tmr.spacing = 6;
-  const te = m.tm.filter((i) => i.k === 'e').slice(0, 2);
-  txt(tmr, 'Jutro', 11, 'b', C(ACCENT));
-  txt(tmr, te.length ? te.map((i) => `${i.ad ? '' : i.s + ' '}${i.t}`).join(' · ') : 'bez wydarzeń', 11, 'm', WHITE());
+  const te = m.tmAll.filter((i) => i.k === 'e').slice(0, 3);
+  const tl2 = tmr.addStack(); tl2.size = new Size(36, 16); txt(tl2, 'Jutro', 11, 'b', C(ACCENT));
+  const tc2 = tmr.addStack(); tc2.size = new Size(CW - 36 - 48 - 12, 16); txt(tc2, te.length ? te.map((i) => `${i.ad ? '' : i.s + ' '}${i.t}`).join(' · ') : 'bez wydarzeń', 11, 'm', WHITE());
   if (wx && wx.tmHi != null) { tmr.addSpacer(); wxIcon(tmr, wx.tmCode == null ? 3 : wx.tmCode, true, 13, DIM()); txt(tmr, `${wx.tmHi}°`, 11, 'b', DIM()); }
 }
 
