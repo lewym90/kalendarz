@@ -5,7 +5,7 @@ const CACHE = fm.joinPath(fm.documentsDirectory(), 'kalendarz-widget-data.json')
 const WXCACHE = fm.joinPath(fm.documentsDirectory(), 'kalendarz-widget-wx.json');
 const APP_URL = 'https://lewym90.github.io/kalendarz/';
 const ASSETS = `${APP_URL}img/widget/`;
-const ASSET_V = 1; // podbij po wymianie grafik, wtedy widget pobierze je od nowa
+const ASSET_V = 2; // podbij po wymianie grafik, wtedy widget pobierze je od nowa
 const ADIR = fm.joinPath(fm.documentsDirectory(), `kalendarz-widget-assets-${ASSET_V}`);
 const pad = (n) => String(n).padStart(2, '0');
 const ymd = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
@@ -258,11 +258,10 @@ function backdrop(w, family, m, wx, size) {
   if (photo) {
     if (family === 'medium') { const pw = size.width * 1.06, ph = pw / 1.5; dc.drawImageInRect(photo, new Rect(size.width * 0.74 - pw / 2, size.height - ph * 0.82, pw, ph)); }
     else { const ph = Math.max(size.height * 1.05, size.width / 1.5), pw = ph * 1.5; dc.drawImageInRect(photo, new Rect((size.width - pw) / 2, size.height - ph * 0.86, pw, ph)); }
-    const dim = n === 0 ? 0 : n === 1 ? 0.28 : n <= 3 ? 0.5 : 0.68;
-    if (dim) {
-      dc.setFillColor(C('#0a111c', dim));
-      if (family === 'medium') dc.fillRect(new Rect(size.width * 0.42, 0, size.width * 0.58, size.height)); else dc.fillRect(new Rect(0, 0, size.width, size.height));
-    }
+    // Granatowa warstwa wtapia zdjęcie w tło, także jasne poranne; im więcej wpisów, tym ciemniej.
+    const dim = n === 0 ? 0.2 : n === 1 ? 0.4 : n <= 3 ? 0.58 : 0.74;
+    dc.setFillColor(C('#0a111c', dim));
+    dc.fillRect(new Rect(0, 0, size.width, size.height));
   }
   const fr = aImg(`ramka-${family === 'small' ? 'maly' : family === 'large' ? 'duzy' : 'sredni'}.png`);
   if (fr) dc.drawImageInRect(fr, new Rect(0, 0, size.width, size.height));
