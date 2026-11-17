@@ -96,16 +96,18 @@ export function alarmsPayload(now = new Date()) {
     });
 }
 
-// Plan dnia na 7 dni dla widgetu (Scriptable): serwer wystawia go pod tajnym adresem.
+// Plan na AGENDA_DAYS dni dla widgetów (Scriptable): serwer wystawia go pod tajnym adresem.
+// Widget Kalendarza bierze z niego tylko dziś i jutro; dłuższy zakres (cały miesiąc) służy widżetom w aucie (X5 Kokpit).
+export const AGENDA_DAYS = 35;
 export function agendaPayload(now = new Date()) {
   const from = startOfDay(now);
-  const to = addDays(from, 7);
+  const to = addDays(from, AGENDA_DAYS);
   const hm = (d) => `${pad(d.getHours())}:${pad(d.getMinutes())}`;
   const inst = instancesInRange(state.events, from, to);
   const pev = peerEvents();
   const pinst = pev.length ? instancesInRange(pev, from, to) : [];
   const days = [];
-  for (let i = 0; i < 7; i++) {
+  for (let i = 0; i < AGENDA_DAYS; i++) {
     const d0 = addDays(from, i), d1 = addDays(from, i + 1), key = ymd(d0);
     const items = inst.filter((x) => x.start < d1 && x.end > d0).map((x) => ({
       k: 'e', ad: x.allDay ? 1 : 0, s: x.allDay ? '' : hm(x.start < d0 ? d0 : x.start), e: x.allDay ? '' : hm(x.end > d1 ? new Date(d1.getTime() - 60000) : x.end),

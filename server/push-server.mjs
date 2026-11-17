@@ -239,7 +239,7 @@ const clean = (a) => ({
 const str = (v, n) => String(v == null ? '' : v).slice(0, n);
 export function cleanAgenda(a) {
   if (!a || !Array.isArray(a.days)) return null;
-  const days = a.days.slice(0, 8).map((d) => ({
+  const days = a.days.slice(0, 36).map((d) => ({ // do 35 dni planu (widżety w aucie), z zapasem
     d: str(d.d, 10),
     items: (Array.isArray(d.items) ? d.items : []).slice(0, 60).map((i) => ({
       k: i.k === 't' ? 't' : 'e', s: str(i.s, 5), e: str(i.e, 5), ad: i.ad ? 1 : 0, t: str(i.t, 120), l: str(i.l, 80), c: /^#[0-9a-fA-F]{6}$/.test(i.c || '') ? i.c : '', done: i.done ? 1 : 0, w: str(i.w, 1),
