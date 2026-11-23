@@ -14,6 +14,14 @@ import { skyName, skyUrl } from './sky.js';
 import { backupOn, backupInfo } from './backup.js';
 import { invitesForMe } from './space.js';
 import { colorChips } from './more.js';
+import { biuroInfo } from './biuro.js';
+
+function biuroSub() {
+  const b = biuroInfo();
+  if (!b.url) return 'Sprawy z Mojej Agencji obok prywatnych';
+  if (b.err) return `Błąd: ${b.err}`;
+  return `${b.count} wpisów, tylko do odczytu${b.at ? ` · ${new Date(b.at).toLocaleTimeString('pl-PL', { hour: '2-digit', minute: '2-digit' })}` : ''}`;
+}
 import { nextUp } from './plan.js';
 import { pushConfig, pushSupported } from './push.js';
 import { peerEvents, peerList, peersOn } from './peers.js';
@@ -719,6 +727,8 @@ export function renderHub() {
     ${go(ICON.bolt, '#FFC400', 'Automatyzacje', 'Briefy i reguły jeśli–to', 'data-act="tab" data-tab="auto"')}
     ${go(ICON.bars, '#2E8BFF', 'Statystyki', 'Czas, zadania, porównania', 'data-act="tab" data-tab="stats"')}
     ${go(ICON.users, '#A45CFF', 'Wspólny kalendarz', 'Zaproszenia, zadania, zakupy', 'data-act="tab" data-tab="shared"')}
+    ${go(ICON.cal, '#D7B068', 'Kalendarz biura', biuroSub(), 'data-act="biuro"')}
+    ${biuroInfo().url ? '<button type="button" class="row" data-act="biuro-odswiez"><span class="ico">' + ICON.history + '</span><span class="rt"><b>Odśwież kalendarz biura</b></span></button>' : ''}
   </div></section>
   <section class="sec"><div class="sec-h"><h2>Powiadomienia</h2></div>
     <div class="list">

@@ -10,6 +10,7 @@ import { renderToday, renderCal, renderTasks, renderHub, paintWeather, bindGridD
 import { openQuickAdd, openEventEditor, openTaskEditor, openRuleEditor, openCatEditor, openSearch, openCitySheet, defaultDraftFor } from './editors.js';
 import { updateLocation } from './geo.js';
 import { fetchPeers, onPeers, clearPeers, peersOn } from './peers.js';
+import { fetchBiuro, onBiuro, setBiuro, biuroInfo } from './biuro.js';
 import { widgetLoaderScript, pushConfig, pushConnect, pushDisconnect, pushTest, pushSync, initPush, pushSupported, schedulePushSync } from './push.js';
 import { isStandalone } from './notify.js';
 import { tick, snooze, updateBadge, enableNotifications, testNotification, setHandlers, briefFor } from './notify.js';
@@ -291,6 +292,14 @@ const actions = {
   async 'push-sync'() { const ok = await pushSync(true); toast(ok ? 'Zsynchronizowano' : 'Synchronizacja nie powiodła się'); render(); },
   'test-notif'() { testNotification(); toast('Wysłano testowe powiadomienie'); },
   export() { download(`kalendarz-kopia-${ymd(new Date())}.json`, exportData(), 'application/json'); },
+  async biuro() {
+    const teraz = biuroInfo().url;
+    const u = window.prompt('Adres kalendarza biura (.ics) z Mojej Agencji: Kalendarz → W telefonie. Puste pole odłącza.', teraz);
+    if (u === null) return;
+    try { await setBiuro(u); toast(u.trim() ? `Podłączono kalendarz biura (${biuroInfo().count} wpisów)` : 'Odłączono kalendarz biura'); } catch (e) { toast(e.message); }
+    render();
+  },
+  async 'biuro-odswiez'() { toast((await fetchBiuro()) ? 'Odświeżono kalendarz biura' : biuroInfo().err || 'Nie udało się'); render(); },
   'export-ics'() { download(`kalendarz-${ymd(new Date())}.ics`, icsExport(), 'text/calendar'); },
   import() { const f = $('#file-in'); f.accept = 'application/json,.json'; f.click(); },
   'import-ics'() { const f = $('#file-in'); f.accept = '.ics,text/calendar'; f.click(); },
@@ -490,6 +499,9 @@ function openPeerSheet(inst) {
   </div>`);
 }
 onPeers(() => { render(); schedulePushSync(); });
+onBiuro(() => render());
+setInterval(() => { if (document.visibilityState === 'visible') fetchBiuro(); }, 15 * 60000);
+setTimeout(() => fetchBiuro(), 2000);
 let lastView = peersOn();
 let lastAuto = state.settings.autoLoc;
 onChange(() => { const v = peersOn(); if (v && !lastView) fetchPeers(); lastView = v; if (state.settings.autoLoc && !lastAuto) locAndWeather(true); lastAuto = state.settings.autoLoc; });

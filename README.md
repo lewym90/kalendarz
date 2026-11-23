@@ -25,6 +25,7 @@ Osobiste centrum dowodzenia: kalendarz, zadania i automatyzacje w jednej aplikac
 - Pogoda 7 dni w widokach i przy wydarzeniach plenerowych
 - Ciemny styl Midnight, wybór koloru wpisów dla każdej osoby, blokada Face ID (WebAuthn) z awaryjnym PIN-em
 - Praca offline, kopia zapasowa JSON
+- **Kalendarz biura** (Więcej → Kalendarz biura): sprawy z programu Moja Agencja (prezentacje, akty, terminy) obok prywatnych, tylko do odczytu; adres `.ics` z programu biura (Kalendarz → W telefonie), odświeżany co 15 minut
 
 - Asystent AI (Gemini przez własny serwer) w polu na ekranie Dziś: odpowiada na pytania o plan i proponuje zmiany „było/będzie” do zatwierdzenia, np. „wypadło mi pilne spotkanie o 16, dopasuj resztę dnia”
 - Automatyczna, szyfrowana kopia na serwerze (7 ostatnich dni), cofanie do 30 kroków i historia zmian

@@ -2,6 +2,7 @@
 import { state } from './store.js';
 import { pushConfig, pushApi } from './push.js';
 import { setExtraEvents } from './notify.js';
+import { biuroEvents } from './biuro.js';
 
 const KEY = 'kalendarz.peers';
 let cache = { list: [], at: 0 };
@@ -15,7 +16,14 @@ export const peersOn = () => !!(state.settings.share && state.settings.share.vie
 const newest = () => [...cache.list].sort((a, b) => (b.gen || 0) - (a.gen || 0)).slice(0, 1);
 export const peerList = () => newest();
 
+// Druga osoba i (jeśli podłączony) kalendarz biura — oba tylko do odczytu.
 export function peerEvents() {
+  const biuro = biuroEvents();
+  const osoby = peerEventsOnly();
+  return biuro.length ? (osoby.length ? osoby.concat(biuro) : biuro) : osoby;
+}
+
+function peerEventsOnly() {
   if (!peersOn()) return [];
   if (built && built.src === cache) return built.out;
   const out = [];

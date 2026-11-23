@@ -1,8 +1,8 @@
 // Service worker: działanie offline, powiadomienia, obsługa kliknięć i (opcjonalnie) push z serwera.
-const VERSION = 'kalendarz-v43';
+const VERSION = 'kalendarz-v44';
 const SHELL = [
   './', 'index.html', 'manifest.webmanifest', 'css/app.css',
-  'js/app.js', 'js/util.js', 'js/store.js', 'js/recur.js', 'js/nlp.js', 'js/notify.js', 'js/weather.js', 'js/ui.js', 'js/editors.js', 'js/screens.js', 'js/extras.js', 'js/data/imieniny.js', 'js/ics.js', 'js/planner.js', 'js/tools.js', 'js/lock.js', 'js/push.js', 'js/peers.js', 'js/geo.js', 'js/glyphs.js', 'js/sky.js', 'js/plan.js', 'js/backup.js', 'js/space.js', 'js/prefs.js', 'js/ai.js', 'js/more.js', 'js/sheets.js', 'js/voice.js',
+  'js/app.js', 'js/util.js', 'js/store.js', 'js/recur.js', 'js/nlp.js', 'js/notify.js', 'js/weather.js', 'js/ui.js', 'js/editors.js', 'js/screens.js', 'js/extras.js', 'js/data/imieniny.js', 'js/ics.js', 'js/planner.js', 'js/tools.js', 'js/lock.js', 'js/push.js', 'js/peers.js', 'js/geo.js', 'js/glyphs.js', 'js/sky.js', 'js/plan.js', 'js/backup.js', 'js/space.js', 'js/prefs.js', 'js/ai.js', 'js/more.js', 'js/sheets.js', 'js/voice.js', 'js/biuro.js',
   'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png', 'img/ikonki.webp',
   ...['swit', 'poranek', 'przedpoludnie', 'poludnie', 'popoludnie', 'zlota', 'zachod', 'zmierzch', 'noc', 'pochmurno-dzien', 'pochmurno-noc', 'deszcz-dzien', 'deszcz-noc', 'snieg-dzien', 'snieg-noc'].map((n) => `img/niebo/${n}.webp`),
 ];
